@@ -49,6 +49,8 @@ def test_celery_queues_and_routing():
 
 def test_celery_task_dispatch_eager_execution():
     # Configure deterministic synchronous eager execution for unit test
+    original_backend = celery_app.conf.result_backend
+    celery_app.conf.result_backend = "cache+memory://"
     celery_app.conf.task_always_eager = True
     celery_app.conf.task_eager_propagates = True
 
@@ -85,5 +87,50 @@ def test_celery_task_dispatch_eager_execution():
         assert val_export["action"] == "export_harmonized_layer"
 
     finally:
+        celery_app.conf.result_backend = original_backend
         celery_app.conf.task_always_eager = False
         celery_app.conf.task_eager_propagates = False
+
+
+def test_dead_letter_queue_and_ping_task():
+    from backend.worker.celery_app import celery_ping_task
+
+    queue_names = {q.name for q in celery_app.conf.task_queues}
+    assert "geo_dead_letter" in queue_names
+
+    res = celery_ping_task()
+    assert res["status"] == "PONG"
+    assert res["service"] == "cadastral_harmonization_engine"
+
+
+def test_get_celery_app_dependency():
+    from backend.worker.celery_app import get_celery_app
+
+    app = get_celery_app()
+    assert isinstance(app, Celery)
+    assert app is celery_app
+
+
+def test_cadastre_task_base_progress_update():
+    from unittest.mock import MagicMock
+    from backend.worker.celery_app import CadastreTask
+
+    task = CadastreTask()
+    task.update_state = MagicMock()
+
+    task.update_progress(45, "RESOLVING_SLIVERS", {"count": 12})
+    task.update_state.assert_called_once_with(
+        state="PROGRESS",
+        meta={
+            "percent": 45,
+            "stage": "RESOLVING_SLIVERS",
+            "details": {"count": 12},
+        },
+    )
+
+
+def test_task_retry_configuration():
+    assert Exception in process_cadastral_layer_task.autoretry_for
+    assert process_cadastral_layer_task.max_retries == 3
+    assert process_cadastral_layer_task.retry_backoff is True
+
