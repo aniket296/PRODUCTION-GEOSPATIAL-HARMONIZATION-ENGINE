@@ -1,8 +1,9 @@
 """Tests for deterministic topological defect injection and synthetic GCP fixtures."""
 
-import math
+from pathlib import Path
 import pytest
 from shapely.geometry import Point, Polygon
+from shapely.validation import explain_validity
 
 from fixtures.cadastral_fixtures import generate_clean_cadastral_fixtures
 from fixtures.defect_fixtures import (
@@ -12,10 +13,13 @@ from fixtures.defect_fixtures import (
     DEFECT_SLIVER_POLYGON,
     create_self_intersecting_polygon,
     create_sliver_polygon,
+    generate_defective_cadastral_dataset,
+    generate_synthetic_dxf_cadastre,
     generate_synthetic_gcp_fixtures,
     inject_boundary_gap,
     inject_critical_dispute_overlap,
     inject_micro_overlap,
+    save_synthetic_dxf,
 )
 
 
@@ -92,8 +96,6 @@ def test_sliver_polygon_creation():
 
 
 def test_self_intersecting_polygon_creation():
-    from shapely.validation import explain_validity
-
     bow_tie = create_self_intersecting_polygon(base_x=3600000.0, base_y=500000.0)
 
     # In shapely, a self-intersecting polygon has is_valid == False
@@ -117,3 +119,55 @@ def test_synthetic_gcp_fixtures():
         assert 10.0 <= gcp["wgs84_lat"] <= 35.0
         assert gcp["target_x"] > 0
         assert gcp["target_y"] > 0
+
+
+def test_generate_defective_cadastral_dataset():
+    parcels, manifest = generate_defective_cadastral_dataset()
+
+    # 10 original parcels + 1 sliver parcel = 11 total
+    assert len(parcels) == 11
+    assert len(manifest) == 4
+
+    defect_types = {d["defect_type"] for d in manifest}
+    assert DEFECT_MICRO_OVERLAP in defect_types
+    assert DEFECT_CRITICAL_OVERLAP in defect_types
+    assert DEFECT_BOUNDARY_GAP in defect_types
+    assert DEFECT_SLIVER_POLYGON in defect_types
+
+
+def test_synthetic_dxf_cadastre():
+    dxf_text = generate_synthetic_dxf_cadastre()
+
+    # Must contain essential DXF sections and tokens
+    assert "0\nSECTION\n2\nHEADER" in dxf_text
+    assert "0\nSECTION\n2\nTABLES" in dxf_text
+    assert "0\nSECTION\n2\nENTITIES" in dxf_text
+    assert "0\nLWPOLYLINE" in dxf_text
+    assert "0\nPOINT" in dxf_text
+    assert "0\nEOF" in dxf_text
+
+    # Must define the PARCELS and SURVEY_GCP layers
+    assert "PARCELS" in dxf_text
+    assert "SURVEY_GCP" in dxf_text
+
+
+def test_save_synthetic_dxf(tmp_path: Path):
+    dxf_file = tmp_path / "cadastre" / "test_village.dxf"
+    result_path = save_synthetic_dxf(dxf_file)
+
+    assert result_path.exists()
+    assert result_path.is_file()
+    assert result_path.stat().st_size > 0
+
+    content = result_path.read_text(encoding="utf-8")
+    assert content.endswith("0\nEOF\n")
+
+
+def test_synthetic_gcp_fixtures_with_residuals():
+    clean_gcps = generate_synthetic_gcp_fixtures(count=4, residual_noise_m=0.0)
+    noisy_gcps = generate_synthetic_gcp_fixtures(count=4, residual_noise_m=0.15)
+
+    assert len(clean_gcps) == len(noisy_gcps) == 4
+    # With residual noise, target coordinates differ by non-zero offset
+    diff_x = abs(clean_gcps[0]["target_x"] - noisy_gcps[0]["target_x"])
+    assert pytest.approx(diff_x, abs=1e-4) == 0.15

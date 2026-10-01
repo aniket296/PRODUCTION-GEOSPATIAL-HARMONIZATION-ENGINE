@@ -10,6 +10,23 @@ from fixtures.cadastral_fixtures import (
     get_fixture_bounds,
     save_fixtures_geojson,
 )
+from fixtures.defect_fixtures import (
+    DEFECT_BOUNDARY_GAP,
+    DEFECT_CRITICAL_OVERLAP,
+    DEFECT_MICRO_OVERLAP,
+    DEFECT_SELF_INTERSECTION,
+    DEFECT_SLIVER_POLYGON,
+    DEFECT_UNCLOSED_RING,
+    create_self_intersecting_polygon,
+    create_sliver_polygon,
+    generate_defective_cadastral_dataset,
+    generate_synthetic_dxf_cadastre,
+    generate_synthetic_gcp_fixtures,
+    inject_boundary_gap,
+    inject_critical_dispute_overlap,
+    inject_micro_overlap,
+    save_synthetic_dxf,
+)
 
 __all__ = [
     "EVEREST_1830_CRS",
@@ -20,4 +37,19 @@ __all__ = [
     "export_fixtures_to_geojson",
     "export_fixtures_to_wkt_mapping",
     "save_fixtures_geojson",
+    "DEFECT_BOUNDARY_GAP",
+    "DEFECT_CRITICAL_OVERLAP",
+    "DEFECT_MICRO_OVERLAP",
+    "DEFECT_SELF_INTERSECTION",
+    "DEFECT_SLIVER_POLYGON",
+    "DEFECT_UNCLOSED_RING",
+    "create_self_intersecting_polygon",
+    "create_sliver_polygon",
+    "generate_defective_cadastral_dataset",
+    "generate_synthetic_dxf_cadastre",
+    "generate_synthetic_gcp_fixtures",
+    "inject_boundary_gap",
+    "inject_critical_dispute_overlap",
+    "inject_micro_overlap",
+    "save_synthetic_dxf",
 ]
