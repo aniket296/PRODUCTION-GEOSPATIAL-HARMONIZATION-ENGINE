@@ -385,6 +385,6 @@ def save_synthetic_dxf(
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     dxf_content = generate_synthetic_dxf_cadastre(parcels=parcels, geometry_key=geometry_key)
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write(dxf_content)
     return path
