@@ -1,21 +1,34 @@
-"""RawCadastralLayer model schema and field definitions."""
+"""RawCadastralLayer model representing unharmonized source cadastral spatial layers.
+
+Provides metadata tracking, provenance, PostGIS spatial indexing, and lifecycle status management.
+"""
+
+from __future__ import annotations
 
 import enum
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from geoalchemy2 import Geometry
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     Float,
+    Index,
     Integer,
     String,
     Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.base import Base
+
+if TYPE_CHECKING:
+    from backend.models.parcel import HarmonizedParcel
+    from backend.models.topology import TopologicalError
+    from backend.models.transformation import TransformationConfig
 
 
 class LayerStatus(str, enum.Enum):
@@ -43,6 +56,18 @@ class RawCadastralLayer(Base):
     """Raw uploaded cadastral layer representing the unharmonized source geometry."""
 
     __tablename__ = "raw_cadastral_layers"
+    __table_args__ = (
+        CheckConstraint(
+            "feature_count >= 0",
+            name="chk_raw_cadastral_layer_feature_count_non_negative",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING', 'UPLOADING', 'PROCESSING', 'CALIBRATED', 'COMPLETED', 'FAILED')",
+            name="chk_raw_cadastral_layer_status_valid",
+        ),
+        Index("ix_raw_cadastral_layers_status", "status"),
+        Index("ix_raw_cadastral_layers_created_at", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -62,6 +87,12 @@ class RawCadastralLayer(Base):
     bounding_box: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     metadata_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
+    # PostGIS bounding polygon geometry (WGS 84 EPSG:4326) with GiST spatial index
+    bounding_geometry: Mapped[Optional[Any]] = mapped_column(
+        Geometry(geometry_type="POLYGON", srid=4326, spatial_index=True),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -73,6 +104,9 @@ class RawCadastralLayer(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    # Relationships to child entities (HarmonizedParcel, TopologicalError, TransformationConfig)
+    # are wired up as each model is implemented in Steps 19, 21, and 23.
 
     def __init__(
         self,
@@ -96,4 +130,55 @@ class RawCadastralLayer(Base):
             status=status,
             feature_count=feature_count,
             **kwargs,
+        )
+
+    def mark_processing(self) -> None:
+        """Transition layer status to PROCESSING."""
+        self.status = LayerStatus.PROCESSING.value
+        self.error_message = None
+        self.updated_at = datetime.now(timezone.utc)
+
+    def mark_completed(
+        self,
+        feature_count: int,
+        total_area_sqm: Optional[float] = None,
+        bounding_box: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Mark layer as successfully processed."""
+        self.status = LayerStatus.COMPLETED.value
+        self.feature_count = feature_count
+        self.total_area_sqm = total_area_sqm
+        self.bounding_box = bounding_box
+        self.error_message = None
+        self.updated_at = datetime.now(timezone.utc)
+
+    def mark_failed(self, error_message: str) -> None:
+        """Mark layer as failed with descriptive diagnostics."""
+        self.status = LayerStatus.FAILED.value
+        self.error_message = error_message
+        self.updated_at = datetime.now(timezone.utc)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize layer metadata to dictionary."""
+        return {
+            "id": str(self.id) if self.id else None,
+            "name": self.name,
+            "filename": self.filename,
+            "file_format": self.file_format,
+            "storage_path": self.storage_path,
+            "source_crs": self.source_crs,
+            "target_crs": self.target_crs,
+            "status": self.status,
+            "error_message": self.error_message,
+            "feature_count": self.feature_count,
+            "total_area_sqm": self.total_area_sqm,
+            "bounding_box": self.bounding_box,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"<RawCadastralLayer id={self.id} name='{self.name}' filename='{self.filename}' "
+            f"format='{self.file_format}' status='{self.status}' count={self.feature_count}>"
         )

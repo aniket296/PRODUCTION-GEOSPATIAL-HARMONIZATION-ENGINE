@@ -100,3 +100,67 @@ def test_model_instantiation():
     assert layer.target_crs == "EPSG:4326"
     assert layer.status == "PENDING"
     assert layer.feature_count == 0
+
+
+def test_table_indexes_and_check_constraints():
+    table = RawCadastralLayer.__table__
+
+    # Verify check constraints
+    check_names = {c.name for c in table.constraints if c.name}
+    assert "chk_raw_cadastral_layer_feature_count_non_negative" in check_names
+    assert "chk_raw_cadastral_layer_status_valid" in check_names
+
+    # Verify indexes
+    index_names = {idx.name for idx in table.indexes}
+    assert "ix_raw_cadastral_layers_status" in index_names
+    assert "ix_raw_cadastral_layers_created_at" in index_names
+
+
+def test_bounding_geometry_column():
+    table = RawCadastralLayer.__table__
+    assert "bounding_geometry" in table.columns
+    geom_col = table.columns["bounding_geometry"]
+    assert geom_col.nullable is True
+    assert geom_col.type.srid == 4326
+    assert geom_col.type.geometry_type == "POLYGON"
+
+
+def test_state_transitions():
+    layer = RawCadastralLayer(
+        name="Ward 12",
+        filename="w12.geojson",
+        file_format=SupportedFormat.GEOJSON.value,
+        storage_path="raw/w12.geojson",
+    )
+    assert layer.status == LayerStatus.PENDING.value
+
+    # Transition to processing
+    layer.mark_processing()
+    assert layer.status == LayerStatus.PROCESSING.value
+    assert layer.error_message is None
+
+    # Transition to completed
+    layer.mark_completed(feature_count=150, total_area_sqm=125000.5, bounding_box={"minx": 77.0})
+    assert layer.status == LayerStatus.COMPLETED.value
+    assert layer.feature_count == 150
+    assert layer.total_area_sqm == 125000.5
+    assert layer.bounding_box == {"minx": 77.0}
+
+    # Transition to failed
+    layer.mark_failed("Corrupt polygon topology encountered")
+    assert layer.status == LayerStatus.FAILED.value
+    assert layer.error_message == "Corrupt polygon topology encountered"
+
+
+def test_to_dict_and_repr():
+    layer = RawCadastralLayer(
+        name="Ward 12",
+        filename="w12.geojson",
+        file_format=SupportedFormat.GEOJSON.value,
+        storage_path="raw/w12.geojson",
+    )
+    data = layer.to_dict()
+    assert isinstance(data, dict)
+    assert data["name"] == "Ward 12"
+    assert data["status"] == "PENDING"
+    assert "w12.geojson" in str(layer)
