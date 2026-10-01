@@ -128,6 +128,27 @@ services:
     networks:
       - cadastre_net
 
+  backend:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: runtime
+    container_name: cadastre_backend
+    environment:
+      <<: *backend-common-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
 # Isolated High-Performance Cadastral Network
 networks:
   cadastre_net:
