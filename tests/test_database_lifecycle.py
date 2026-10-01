@@ -161,3 +161,33 @@ class TestAsyncSessionGeneratorDependency:
         async with session_factory() as check_session:
             result = await check_session.execute(text("SELECT COUNT(*) FROM test_gen_err"))
             assert result.scalar_one() == 0
+
+
+class TestBackendDBSessionModule:
+    """Verifies backend.db package exports, custom engine creation, and declarative base."""
+
+    def test_declarative_base_inheritance(self):
+        from backend.db.base import Base
+        from sqlalchemy.orm import DeclarativeBase
+        assert issubclass(Base, DeclarativeBase)
+
+    def test_backend_db_exports(self):
+        import backend.db as db
+        assert hasattr(db, "Base")
+        assert hasattr(db, "engine")
+        assert hasattr(db, "async_session_factory")
+        assert hasattr(db, "AsyncSessionLocal")
+        assert hasattr(db, "get_async_session")
+        assert hasattr(db, "create_engine_instance")
+        assert hasattr(db, "get_sync_engine")
+
+    @pytest.mark.asyncio
+    async def test_custom_sqlite_engine_creation(self):
+        from backend.db.session import create_engine_instance, async_sessionmaker
+        test_engine = create_engine_instance("sqlite+aiosqlite:///:memory:")
+        assert isinstance(test_engine, AsyncEngine)
+        factory = async_sessionmaker(bind=test_engine, class_=AsyncSession, expire_on_commit=False)
+        async with factory() as session:
+            res = await session.execute(text("SELECT 'harmonized' AS status"))
+            assert res.scalar_one() == "harmonized"
+        test_engine.sync_engine.dispose()
