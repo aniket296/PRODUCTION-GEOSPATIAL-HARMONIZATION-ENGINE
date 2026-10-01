@@ -176,3 +176,86 @@ def test_file_exists_true_and_false(storage_client, mock_minio):
 def test_delete_file(storage_client, mock_minio):
     storage_client.delete_file("cadastral-raw", "to_delete.dxf")
     mock_minio.remove_object.assert_called_once_with("cadastral-raw", "to_delete.dxf")
+
+
+def test_detect_content_type():
+    from backend.storage.minio_client import detect_content_type
+
+    assert detect_content_type("survey.dxf") == "application/dxf"
+    assert detect_content_type("boundary.DXF") == "application/dxf"
+    assert detect_content_type("parcels.geojson") == "application/geo+json"
+    assert detect_content_type("parcels.fgb") == "application/vnd.flatgeobuf"
+    assert detect_content_type("layer.shp") == "application/x-shapefile"
+    assert detect_content_type("database.gpkg") == "application/geopackage+sqlite3"
+    assert detect_content_type("ortho.tif") == "image/tiff"
+    assert detect_content_type("archive.zip") == "application/zip"
+    assert detect_content_type("unknown.bin") == "application/octet-stream"
+
+
+def test_initialize_buckets(storage_client, mock_minio):
+    # One exists, one missing
+    mock_minio.bucket_exists.side_effect = lambda b: b == "cadastral-raw"
+
+    results = storage_client.initialize_buckets()
+
+    assert results["cadastral-raw"] is False
+    assert results["cadastral-harmonized"] is True
+    mock_minio.make_bucket.assert_called_once_with("cadastral-harmonized")
+
+
+def test_get_object_metadata(storage_client, mock_minio):
+    mock_stat = MagicMock()
+    mock_stat.object_name = "raw/survey.dxf"
+    mock_stat.size = 2048
+    mock_stat.etag = "abc123etag"
+    mock_stat.content_type = "application/dxf"
+    mock_stat.last_modified = "2026-10-01T20:00:00Z"
+    mock_stat.metadata = {"crs": "EPSG:24378"}
+    mock_minio.stat_object.return_value = mock_stat
+
+    meta = storage_client.get_object_metadata("cadastral-raw", "raw/survey.dxf")
+
+    assert meta["object_name"] == "raw/survey.dxf"
+    assert meta["size"] == 2048
+    assert meta["content_type"] == "application/dxf"
+    assert meta["metadata"]["crs"] == "EPSG:24378"
+
+
+def test_list_objects(storage_client, mock_minio):
+    obj1 = MagicMock(object_name="raw/file1.dxf", size=1024, etag="tag1", last_modified="time1", is_dir=False)
+    obj2 = MagicMock(object_name="raw/file2.dxf", size=2048, etag="tag2", last_modified="time2", is_dir=False)
+    mock_minio.list_objects.return_value = [obj1, obj2]
+
+    items = storage_client.list_objects("cadastral-raw", prefix="raw/", recursive=True)
+
+    assert len(items) == 2
+    assert items[0]["object_name"] == "raw/file1.dxf"
+    assert items[1]["size"] == 2048
+    mock_minio.list_objects.assert_called_once_with("cadastral-raw", prefix="raw/", recursive=True)
+
+
+def test_copy_object(storage_client, mock_minio):
+    mock_minio.bucket_exists.return_value = True
+
+    storage_client.copy_object(
+        source_bucket="cadastral-raw",
+        source_object="staging/p1.dxf",
+        target_bucket="cadastral-harmonized",
+        target_object="archive/p1.dxf",
+    )
+
+    mock_minio.copy_object.assert_called_once()
+    args = mock_minio.copy_object.call_args[0]
+    assert args[0] == "cadastral-harmonized"
+    assert args[1] == "archive/p1.dxf"
+
+
+def test_get_storage_client_singleton():
+    from backend.storage.minio_client import get_storage_client
+
+    client1 = get_storage_client()
+    client2 = get_storage_client()
+
+    assert client1 is not None
+    assert client1 is client2
+

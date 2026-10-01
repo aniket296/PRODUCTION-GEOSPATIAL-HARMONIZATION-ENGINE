@@ -4,12 +4,35 @@ from __future__ import annotations
 
 import io
 from datetime import timedelta
-from typing import BinaryIO, Dict, Generator, Optional, Union
+from pathlib import Path
+from typing import Any, BinaryIO, Dict, Generator, List, Optional, Union
 
 from minio import Minio
+from minio.commonconfig import CopySource
 from minio.error import S3Error
 
 from backend.core.config import get_settings
+
+GEOSPATIAL_MIME_TYPES: Dict[str, str] = {
+    ".dxf": "application/dxf",
+    ".geojson": "application/geo+json",
+    ".json": "application/geo+json",
+    ".fgb": "application/vnd.flatgeobuf",
+    ".shp": "application/x-shapefile",
+    ".dbf": "application/x-dbf",
+    ".shx": "application/x-shx",
+    ".prj": "text/plain",
+    ".gpkg": "application/geopackage+sqlite3",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".zip": "application/zip",
+}
+
+
+def detect_content_type(filename: str) -> str:
+    """Deterministically detect MIME content-type based on cadastral file extension."""
+    ext = Path(filename).suffix.lower()
+    return GEOSPATIAL_MIME_TYPES.get(ext, "application/octet-stream")
 
 
 class MinioStorageClient:
@@ -46,16 +69,29 @@ class MinioStorageClient:
             return True
         return False
 
+    def initialize_buckets(self) -> Dict[str, bool]:
+        """Ensure both raw and harmonized application storage buckets are provisioned."""
+        settings = get_settings()
+        raw_created = self.ensure_bucket_exists(settings.minio_bucket_raw)
+        harmonized_created = self.ensure_bucket_exists(settings.minio_bucket_harmonized)
+        return {
+            settings.minio_bucket_raw: raw_created,
+            settings.minio_bucket_harmonized: harmonized_created,
+        }
+
     def upload_file(
         self,
         bucket_name: str,
         object_name: str,
         file_data: Union[bytes, BinaryIO],
-        content_type: str = "application/octet-stream",
+        content_type: Optional[str] = None,
         metadata: Optional[Dict[str, str]] = None,
     ) -> str:
         """Upload raw or harmonized geospatial file to MinIO bucket."""
         self.ensure_bucket_exists(bucket_name)
+
+        if not content_type or content_type == "application/octet-stream":
+            content_type = detect_content_type(object_name)
 
         if isinstance(file_data, bytes):
             data_stream = io.BytesIO(file_data)
@@ -127,6 +163,54 @@ class MinioStorageClient:
             expires=timedelta(seconds=expires_seconds),
         )
 
+    def get_object_metadata(self, bucket_name: str, object_name: str) -> Dict[str, Any]:
+        """Retrieve size, etag, content type, and custom metadata for an object."""
+        stat = self.client.stat_object(bucket_name, object_name)
+        return {
+            "object_name": stat.object_name,
+            "size": stat.size,
+            "etag": stat.etag,
+            "content_type": stat.content_type,
+            "last_modified": stat.last_modified,
+            "metadata": stat.metadata or {},
+        }
+
+    def list_objects(
+        self,
+        bucket_name: str,
+        prefix: Optional[str] = None,
+        recursive: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """List objects in specified bucket with optional folder prefix."""
+        results: List[Dict[str, Any]] = []
+        objects = self.client.list_objects(bucket_name, prefix=prefix, recursive=recursive)
+        for obj in objects:
+            results.append(
+                {
+                    "object_name": obj.object_name,
+                    "size": obj.size,
+                    "etag": obj.etag,
+                    "last_modified": obj.last_modified,
+                    "is_dir": obj.is_dir,
+                }
+            )
+        return results
+
+    def copy_object(
+        self,
+        source_bucket: str,
+        source_object: str,
+        target_bucket: str,
+        target_object: str,
+    ) -> None:
+        """Copy object from source bucket to target bucket."""
+        self.ensure_bucket_exists(target_bucket)
+        self.client.copy_object(
+            target_bucket,
+            target_object,
+            CopySource(source_bucket, source_object),
+        )
+
     def file_exists(self, bucket_name: str, object_name: str) -> bool:
         """Check whether object exists in bucket."""
         try:
@@ -140,3 +224,14 @@ class MinioStorageClient:
     def delete_file(self, bucket_name: str, object_name: str) -> None:
         """Delete object from specified bucket."""
         self.client.remove_object(bucket_name, object_name)
+
+
+_storage_client_instance: Optional[MinioStorageClient] = None
+
+
+def get_storage_client() -> MinioStorageClient:
+    """Dependency provider returning singleton MinioStorageClient instance."""
+    global _storage_client_instance
+    if _storage_client_instance is None:
+        _storage_client_instance = MinioStorageClient()
+    return _storage_client_instance
