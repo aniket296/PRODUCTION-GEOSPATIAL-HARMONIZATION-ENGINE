@@ -1,12 +1,20 @@
-"""HarmonizedParcel model representing standardized, projected cadastral parcels."""
+"""HarmonizedParcel model representing standardized, projected cadastral parcels.
+
+Implements projected metric spatial operations, Polsby-Popper compactness,
+deterministic sliver detection, dispute locking, and RFC 7946 GeoJSON export.
+"""
+
+from __future__ import annotations
 
 import enum
 import math
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from geoalchemy2 import Geometry
+from geoalchemy2.shape import to_shape
+from shapely.geometry import mapping
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -20,6 +28,9 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.base import Base
+
+if TYPE_CHECKING:
+    from backend.models.layer import RawCadastralLayer
 
 
 class ParcelResolutionStatus(str, enum.Enum):
@@ -49,6 +60,7 @@ class HarmonizedParcel(Base):
         Index("ix_harmonized_parcels_is_sliver", "is_sliver"),
         Index("ix_harmonized_parcels_is_disputed", "is_disputed"),
         Index("ix_harmonized_parcels_dispute_locked", "dispute_locked"),
+        Index("ix_harmonized_parcels_resolution_status", "resolution_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -108,7 +120,7 @@ class HarmonizedParcel(Base):
     )
 
     # Relationship to parent layer
-    layer: Mapped["RawCadastralLayer"] = relationship(
+    layer: Mapped[RawCadastralLayer] = relationship(
         "RawCadastralLayer",
         back_populates="parcels",
     )
@@ -151,8 +163,96 @@ class HarmonizedParcel(Base):
     def calculate_polsby_popper(area_sqm: float, perimeter_m: float) -> float:
         """Calculate Polsby-Popper compactness: 4 * pi * Area / (Perimeter ^ 2).
 
-        Returns 0.0 if perimeter is non-positive. Maximum value is 1.0 (circle).
+        Returns 0.0 if perimeter is non-positive. Maximum theoretical value is 1.0 (circle).
         """
         if perimeter_m <= 0 or area_sqm <= 0:
             return 0.0
         return (4.0 * math.pi * area_sqm) / (perimeter_m * perimeter_m)
+
+    def recalculate_metrics(self, shapely_projected_geom: Optional[Any] = None) -> None:
+        """Recalculate metric area, perimeter, Polsby-Popper compactness, and sliver status."""
+        geom = shapely_projected_geom
+        if geom is None and self.geometry_projected is not None:
+            try:
+                geom = to_shape(self.geometry_projected)
+            except Exception:
+                geom = None
+
+        if geom is not None and not geom.is_empty:
+            self.metric_area_sqm = float(round(geom.area, 4))
+            self.metric_perimeter_m = float(round(geom.length, 4))
+            self.polsby_popper_compactness = float(
+                round(
+                    self.calculate_polsby_popper(self.metric_area_sqm, self.metric_perimeter_m),
+                    6,
+                )
+            )
+            # Section 16: area < 10 sqm AND Polsby-Popper < 0.05
+            self.is_sliver = bool(
+                self.metric_area_sqm < 10.0 and self.polsby_popper_compactness < 0.05
+            )
+        self.updated_at = datetime.now(timezone.utc)
+
+    def lock_dispute(self, reason: Optional[str] = None) -> None:
+        """Lock parcel boundary due to critical dispute (> 2% overlap).
+
+        Prevents automatic healing and preserves provenance.
+        """
+        self.is_disputed = True
+        self.dispute_locked = True
+        self.resolution_status = ParcelResolutionStatus.DISPUTED.value
+        if reason:
+            attrs = dict(self.attributes or {})
+            attrs["dispute_reason"] = reason
+            self.attributes = attrs
+        self.updated_at = datetime.now(timezone.utc)
+
+    def mark_auto_resolved(self) -> None:
+        """Mark parcel as successfully healed via deterministic micro-overlap or sliver union."""
+        if self.dispute_locked:
+            raise ValueError(
+                f"Cannot automatically resolve parcel {self.parcel_identifier}: Boundary is dispute locked."
+            )
+        self.resolution_status = ParcelResolutionStatus.AUTO_RESOLVED.value
+        self.updated_at = datetime.now(timezone.utc)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize parcel metadata and metric properties to dictionary."""
+        return {
+            "id": str(self.id) if self.id else None,
+            "layer_id": str(self.layer_id) if self.layer_id else None,
+            "parcel_identifier": self.parcel_identifier,
+            "original_parcel_id": self.original_parcel_id,
+            "metric_area_sqm": self.metric_area_sqm,
+            "metric_perimeter_m": self.metric_perimeter_m,
+            "polsby_popper_compactness": self.polsby_popper_compactness,
+            "is_sliver": self.is_sliver,
+            "is_disputed": self.is_disputed,
+            "dispute_locked": self.dispute_locked,
+            "resolution_status": self.resolution_status,
+            "attributes": self.attributes,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_geojson_feature(self) -> Dict[str, Any]:
+        """Generate an RFC 7946 compliant GeoJSON Feature dictionary."""
+        geom_dict = None
+        if self.geometry_wgs84 is not None:
+            try:
+                geom_dict = mapping(to_shape(self.geometry_wgs84))
+            except Exception:
+                geom_dict = None
+
+        return {
+            "type": "Feature",
+            "id": str(self.id) if self.id else None,
+            "geometry": geom_dict,
+            "properties": self.to_dict(),
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"<HarmonizedParcel id={self.id} identifier='{self.parcel_identifier}' "
+            f"area={self.metric_area_sqm:.2f}m² sliver={self.is_sliver} disputed={self.is_disputed}>"
+        )

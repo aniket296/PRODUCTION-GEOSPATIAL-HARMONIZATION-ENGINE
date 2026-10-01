@@ -124,3 +124,88 @@ def test_parcel_instantiation_and_relationship():
     assert parcel.is_disputed is False
     assert parcel.dispute_locked is False
     assert parcel.resolution_status == "ORIGINAL"
+
+
+def test_recalculate_metrics_and_sliver_detection():
+    from shapely.geometry import Polygon
+
+    layer_id = uuid.uuid4()
+    wkt_poly = "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)))"
+    parcel = HarmonizedParcel(
+        layer_id=layer_id,
+        parcel_identifier="KHASRA-99",
+        geometry_wgs84=WKTElement(wkt_poly, srid=4326),
+        geometry_projected=WKTElement(wkt_poly, srid=32643),
+    )
+
+    # Standard 10x10 square
+    square = Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])
+    parcel.recalculate_metrics(square)
+    assert parcel.metric_area_sqm == 100.0
+    assert parcel.metric_perimeter_m == 40.0
+    assert parcel.is_sliver is False
+
+    # Sliver polygon: area = 5 sqm (< 10), perimeter = 60 m => compactness = 4*pi*5 / 3600 ~= 0.017 (< 0.05)
+    sliver = Polygon([(0, 0), (25, 0), (25, 0.2), (0, 0.2), (0, 0)])
+    parcel.recalculate_metrics(sliver)
+    assert parcel.metric_area_sqm == 5.0
+    assert parcel.is_sliver is True
+
+
+def test_dispute_locking_and_resolution_status():
+    layer_id = uuid.uuid4()
+    wkt_poly = "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)))"
+    parcel = HarmonizedParcel(
+        layer_id=layer_id,
+        parcel_identifier="KHASRA-DISPUTE-1",
+        geometry_wgs84=WKTElement(wkt_poly, srid=4326),
+        geometry_projected=WKTElement(wkt_poly, srid=32643),
+    )
+
+    # Initial state
+    assert parcel.resolution_status == "ORIGINAL"
+    assert parcel.dispute_locked is False
+
+    # Lock dispute (> 2% overlap)
+    parcel.lock_dispute(reason="Critical overlap of 5.4% detected with parcel B")
+    assert parcel.is_disputed is True
+    assert parcel.dispute_locked is True
+    assert parcel.resolution_status == "DISPUTED"
+    assert "Critical overlap" in parcel.attributes["dispute_reason"]
+
+    # Attempting to auto-resolve a locked parcel must raise ValueError (Section 21)
+    with pytest.raises(ValueError, match="dispute locked"):
+        parcel.mark_auto_resolved()
+
+
+def test_auto_resolve_eligible_parcel():
+    layer_id = uuid.uuid4()
+    wkt_poly = "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)))"
+    parcel = HarmonizedParcel(
+        layer_id=layer_id,
+        parcel_identifier="KHASRA-AUTO-1",
+        geometry_wgs84=WKTElement(wkt_poly, srid=4326),
+        geometry_projected=WKTElement(wkt_poly, srid=32643),
+    )
+
+    parcel.mark_auto_resolved()
+    assert parcel.resolution_status == "AUTO_RESOLVED"
+
+
+def test_geojson_feature_export_and_repr():
+    layer_id = uuid.uuid4()
+    wkt_poly = "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)))"
+    parcel = HarmonizedParcel(
+        layer_id=layer_id,
+        parcel_identifier="KHASRA-EXPORT",
+        geometry_wgs84=WKTElement(wkt_poly, srid=4326),
+        geometry_projected=WKTElement(wkt_poly, srid=32643),
+        metric_area_sqm=100.0,
+    )
+
+    feature = parcel.to_geojson_feature()
+    assert feature["type"] == "Feature"
+    assert feature["geometry"]["type"] == "MultiPolygon"
+    assert feature["properties"]["parcel_identifier"] == "KHASRA-EXPORT"
+    assert feature["properties"]["metric_area_sqm"] == 100.0
+    assert "KHASRA-EXPORT" in str(parcel)
