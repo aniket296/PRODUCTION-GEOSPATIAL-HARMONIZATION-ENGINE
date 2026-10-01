@@ -135,6 +135,7 @@ services:
       dockerfile: docker/backend/Dockerfile
       target: runtime
     container_name: cadastre_backend
+    user: "1000:1000"
     environment:
       <<: *backend-common-env
     ports:

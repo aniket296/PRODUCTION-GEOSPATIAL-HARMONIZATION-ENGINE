@@ -67,13 +67,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PROJ_LIB=/usr/share/proj \
     GDAL_DATA=/usr/share/gdal \
     CPLUS_INCLUDE_PATH=/usr/include/gdal \
-    C_INCLUDE_PATH=/usr/include/gdal
+    C_INCLUDE_PATH=/usr/include/gdal \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:$PATH"
 
 # Copy virtual environment from builder stage
 COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+
+# Create dedicated non-root application user and group
+RUN groupadd -g 1000 cadastre_user && \
+    useradd -u 1000 -g cadastre_user -m -s /bin/bash cadastre_user && \
+    mkdir -p /app /app/backend && \
+    chown -R cadastre_user:cadastre_user /opt/venv /app
 
 WORKDIR /app
 
-# Smoke test geospatial CLI binaries in container
-RUN gdalinfo --version && geos-config --version && proj
+# Switch to non-root cadastre_user
+USER cadastre_user
+
+# Smoke test geospatial CLI binaries and Python virtual environment in container
+RUN gdalinfo --version && geos-config --version && proj && python3 --version
