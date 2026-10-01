@@ -150,6 +150,27 @@ services:
       minio:
         condition: service_healthy
 
+  worker:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: runtime
+    container_name: cadastre_worker
+    user: "1000:1000"
+    command: celery -A backend.worker.celery_app worker --loglevel=INFO -c 4
+    environment:
+      <<: *backend-common-env
+    volumes:
+      - ./backend:/app/backend
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
 # Isolated High-Performance Cadastral Network
 networks:
   cadastre_net:
