@@ -1,5 +1,6 @@
 import asyncio
 from logging.config import fileConfig
+from typing import Any, Optional
 
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
@@ -10,29 +11,48 @@ from backend.core.config import get_settings
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
-config = context.config
+try:
+    config = context.config
+except AttributeError:
+    config = None
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
+if config is not None and config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Ensure database URL from settings is used if available
-try:
-    settings = get_settings()
-    if settings.database_url:
-        config.set_main_option("sqlalchemy.url", settings.database_url)
-except Exception:
-    pass
+if config is not None:
+    try:
+        settings = get_settings()
+        if settings.database_url:
+            config.set_main_option("sqlalchemy.url", settings.database_url)
+    except Exception:
+        pass
 
-# add your model's MetaData object here
-# for 'autogenerate' support
-target_metadata = None
+# Discover and bind all GeoAlchemy2 models to target metadata
+import backend.models  # noqa: F401
+from backend.db.base import Base
 
-# other values from the config, defined by the needs of env.py,
-# can be acquired:
-# my_important_option = config.get_main_option("my_important_option")
-# ... etc.
+target_metadata = Base.metadata
+
+# PostGIS / system tables that should not be dropped or modified during autogenerate migrations
+EXCLUDED_TABLES = {
+    "spatial_ref_sys",
+    "geometry_columns",
+    "geography_columns",
+    "raster_columns",
+    "raster_overviews",
+    "topology",
+    "layer",
+}
+
+
+def include_object(object: Any, name: Optional[str], type_: str, reflected: bool, compare_to: Any) -> bool:
+    """Filter out PostGIS system and topology metadata tables from autogenerate diffs."""
+    if type_ == "table" and name in EXCLUDED_TABLES:
+        return False
+    return True
 
 
 def run_migrations_offline() -> None:
@@ -51,6 +71,7 @@ def run_migrations_offline() -> None:
     context.configure(
         url=url,
         target_metadata=target_metadata,
+        include_object=include_object,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
@@ -60,7 +81,11 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        include_object=include_object,
+    )
 
     with context.begin_transaction():
         context.run_migrations()
@@ -90,7 +115,9 @@ def run_migrations_online() -> None:
     asyncio.run(run_async_migrations())
 
 
-if context.is_offline_mode():
-    run_migrations_offline()
-else:
-    run_migrations_online()
+if config is not None:
+    if context.is_offline_mode():
+        run_migrations_offline()
+    else:
+        run_migrations_online()
+

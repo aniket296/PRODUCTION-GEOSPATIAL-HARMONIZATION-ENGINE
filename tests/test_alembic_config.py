@@ -48,3 +48,49 @@ def test_alembic_env_py_contains_async_routines():
     assert "run_migrations_online" in content
     assert "run_migrations_offline" in content
     assert "async_engine_from_config" in content
+
+
+def test_alembic_model_metadata_discovery():
+    from backend.alembic.env import target_metadata
+
+    assert target_metadata is not None
+    discovered_tables = set(target_metadata.tables.keys())
+
+    expected_tables = {
+        "raw_cadastral_layers",
+        "harmonized_parcels",
+        "topological_errors",
+        "transformation_configs",
+    }
+    for table_name in expected_tables:
+        assert table_name in discovered_tables, f"Table {table_name} missing from Alembic target_metadata"
+
+    # Verify GeoAlchemy2 spatial geometry columns are attached to target metadata
+    parcels_table = target_metadata.tables["harmonized_parcels"]
+    assert "geometry_wgs84" in parcels_table.columns
+    assert "geometry_projected" in parcels_table.columns
+
+    errors_table = target_metadata.tables["topological_errors"]
+    assert "error_geometry_wgs84" in errors_table.columns
+    assert "error_geometry_projected" in errors_table.columns
+
+
+def test_alembic_include_object_filter():
+    from backend.alembic.env import EXCLUDED_TABLES, include_object
+
+    assert "spatial_ref_sys" in EXCLUDED_TABLES
+    assert "topology" in EXCLUDED_TABLES
+    assert "layer" in EXCLUDED_TABLES
+
+    # PostGIS system tables must be excluded from autogeneration diffs
+    assert include_object(None, "spatial_ref_sys", "table", False, None) is False
+    assert include_object(None, "topology", "table", False, None) is False
+    assert include_object(None, "layer", "table", False, None) is False
+    assert include_object(None, "geometry_columns", "table", False, None) is False
+
+    # Cadastral application domain tables must be included
+    assert include_object(None, "raw_cadastral_layers", "table", False, None) is True
+    assert include_object(None, "harmonized_parcels", "table", False, None) is True
+    assert include_object(None, "topological_errors", "table", False, None) is True
+    assert include_object(None, "transformation_configs", "table", False, None) is True
+
