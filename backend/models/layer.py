@@ -116,6 +116,11 @@ class RawCadastralLayer(Base):
         back_populates="layer",
         cascade="all, delete-orphan",
     )
+    transformation_configs: Mapped[List["TransformationConfig"]] = relationship(
+        "TransformationConfig",
+        back_populates="layer",
+        cascade="all, delete-orphan",
+    )
 
     def __init__(
         self,

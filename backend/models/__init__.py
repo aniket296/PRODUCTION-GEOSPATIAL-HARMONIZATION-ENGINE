@@ -7,6 +7,7 @@ from backend.models.topology import (
     TopologyErrorType,
     TopologySeverity,
 )
+from backend.models.transformation import TransformationConfig, TransformationType
 
 __all__ = [
     "RawCadastralLayer",
@@ -17,4 +18,6 @@ __all__ = [
     "TopologicalError",
     "TopologyErrorType",
     "TopologySeverity",
+    "TransformationConfig",
+    "TransformationType",
 ]
