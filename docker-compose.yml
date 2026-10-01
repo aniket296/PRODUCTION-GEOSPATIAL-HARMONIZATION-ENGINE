@@ -41,8 +41,27 @@ x-backend-common-env: &backend-common-env
   MINIO_BUCKET_RAW: ${MINIO_BUCKET_RAW:-cadastral-raw}
   MINIO_BUCKET_HARMONIZED: ${MINIO_BUCKET_HARMONIZED:-cadastral-harmonized}
 
-# Services will be systematically integrated in Steps 3-10
-services: {}
+# Services
+services:
+  postgres:
+    <<: *service-defaults
+    image: postgis/postgis:16-3.4
+    container_name: cadastre_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cadastre_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cadastre_secure_password}
+      POSTGRES_DB: ${POSTGRES_DB:-cadastre_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cadastre_user} -d ${POSTGRES_DB:-cadastre_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 # Isolated High-Performance Cadastral Network
 networks:
