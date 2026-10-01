@@ -94,3 +94,30 @@ def test_alembic_include_object_filter():
     assert include_object(None, "topological_errors", "table", False, None) is True
     assert include_object(None, "transformation_configs", "table", False, None) is True
 
+
+def test_alembic_baseline_migration_revision_and_sql(capsys):
+    from alembic import command
+
+    ini_path = REPO_ROOT / "alembic.ini"
+    config = Config(str(ini_path))
+
+    script_dir = ScriptDirectory.from_config(config)
+    head_rev = script_dir.get_current_head()
+    assert head_rev == "d090d02ee3a0"
+
+    # Test static SQL output generation
+    command.upgrade(config, "head", sql=True)
+    captured = capsys.readouterr()
+    sql_output = captured.out
+
+    assert "CREATE EXTENSION IF NOT EXISTS postgis;" in sql_output
+    assert "CREATE TABLE raw_cadastral_layers" in sql_output
+    assert "CREATE TABLE harmonized_parcels" in sql_output
+    assert "CREATE TABLE topological_errors" in sql_output
+    assert "CREATE TABLE transformation_configs" in sql_output
+    assert "USING gist (geometry_wgs84)" in sql_output
+    assert "USING gist (geometry_projected)" in sql_output
+    assert "d090d02ee3a0" in sql_output
+
+
+
