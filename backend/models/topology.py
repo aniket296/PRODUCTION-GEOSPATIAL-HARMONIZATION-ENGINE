@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from geoalchemy2 import Geometry
+from geoalchemy2.shape import to_shape
+from shapely.geometry import mapping
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -69,6 +71,10 @@ class TopologicalError(Base):
         Index("ix_topological_errors_severity", "severity"),
         Index("ix_topological_errors_error_type", "error_type"),
         Index("ix_topological_errors_is_resolved", "is_resolved"),
+        Index("ix_topological_errors_primary_parcel", "primary_parcel_id"),
+        Index("ix_topological_errors_secondary_parcel", "secondary_parcel_id"),
+        Index("ix_topological_errors_layer_severity", "layer_id", "severity"),
+        Index("ix_topological_errors_layer_error_type", "layer_id", "error_type"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -175,3 +181,95 @@ class TopologicalError(Base):
             resolution_details=resolution_details,
             **kwargs,
         )
+
+    @classmethod
+    def classify_overlap_severity(
+        cls,
+        overlap_pct_primary: Optional[float],
+        overlap_pct_secondary: Optional[float],
+        threshold: float = 2.0,
+    ) -> TopologySeverity:
+        """Classify overlap severity deterministically based on threshold (Section 15).
+
+        Overlap <= 2.0% on both parcels is AUTO_RESOLVABLE.
+        Overlap > 2.0% on either parcel is CRITICAL_DISPUTE requiring manual review.
+        """
+        pct1 = overlap_pct_primary or 0.0
+        pct2 = overlap_pct_secondary or 0.0
+        if pct1 > threshold or pct2 > threshold:
+            return TopologySeverity.CRITICAL_DISPUTE
+        return TopologySeverity.AUTO_RESOLVABLE
+
+    def resolve(
+        self,
+        method: str,
+        resolved_by: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Mark error as resolved with provenance audit trail."""
+        self.is_resolved = True
+        self.resolution_method = method
+        self.resolved_by = resolved_by
+        self.resolved_at = datetime.now(timezone.utc)
+        self.resolution_details = details
+        self.updated_at = datetime.now(timezone.utc)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize topological error attributes to dictionary."""
+        return {
+            "id": str(self.id) if self.id else None,
+            "layer_id": str(self.layer_id) if self.layer_id else None,
+            "primary_parcel_id": str(self.primary_parcel_id) if self.primary_parcel_id else None,
+            "secondary_parcel_id": str(self.secondary_parcel_id) if self.secondary_parcel_id else None,
+            "error_type": self.error_type,
+            "severity": self.severity,
+            "description": self.description,
+            "overlap_percentage_primary": self.overlap_percentage_primary,
+            "overlap_percentage_secondary": self.overlap_percentage_secondary,
+            "affected_area_sqm": self.affected_area_sqm,
+            "is_resolved": self.is_resolved,
+            "resolution_method": self.resolution_method,
+            "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+            "resolved_by": self.resolved_by,
+            "resolution_details": self.resolution_details,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_geojson_feature(self) -> Dict[str, Any]:
+        """Generate an RFC 7946 compliant GeoJSON Feature dictionary."""
+        geom_dict = None
+        if self.error_geometry_wgs84 is not None:
+            try:
+                geom_dict = mapping(to_shape(self.error_geometry_wgs84))
+            except Exception:
+                geom_dict = None
+
+        return {
+            "type": "Feature",
+            "id": str(self.id) if self.id else None,
+            "geometry": geom_dict,
+            "properties": {
+                "layer_id": str(self.layer_id) if self.layer_id else None,
+                "primary_parcel_id": str(self.primary_parcel_id) if self.primary_parcel_id else None,
+                "secondary_parcel_id": str(self.secondary_parcel_id) if self.secondary_parcel_id else None,
+                "error_type": self.error_type,
+                "severity": self.severity,
+                "description": self.description,
+                "overlap_percentage_primary": self.overlap_percentage_primary,
+                "overlap_percentage_secondary": self.overlap_percentage_secondary,
+                "affected_area_sqm": self.affected_area_sqm,
+                "is_resolved": self.is_resolved,
+                "resolution_method": self.resolution_method,
+                "resolved_at": self.resolved_at.isoformat() if self.resolved_at else None,
+                "resolved_by": self.resolved_by,
+                "resolution_details": self.resolution_details,
+            },
+        }
+
+    def __repr__(self) -> str:
+        return (
+            f"<TopologicalError(id={self.id}, type='{self.error_type}', "
+            f"severity='{self.severity}', is_resolved={self.is_resolved})>"
+        )
+
