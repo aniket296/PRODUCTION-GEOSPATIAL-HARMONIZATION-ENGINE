@@ -105,8 +105,12 @@ class RawCadastralLayer(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    # Relationships to child entities (HarmonizedParcel, TopologicalError, TransformationConfig)
-    # are wired up as each model is implemented in Steps 19, 21, and 23.
+    # Relationships to child entities
+    parcels: Mapped[List["HarmonizedParcel"]] = relationship(
+        "HarmonizedParcel",
+        back_populates="layer",
+        cascade="all, delete-orphan",
+    )
 
     def __init__(
         self,
