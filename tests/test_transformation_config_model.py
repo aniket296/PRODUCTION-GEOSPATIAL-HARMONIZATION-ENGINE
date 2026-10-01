@@ -185,3 +185,86 @@ def test_transformation_config_to_dict_and_repr():
     assert "TransformationConfig" in r
     assert "THIN_PLATE_SPLINE" in r
     assert "LOCAL_VILLAGE_GRID" in r
+
+
+def test_transformation_config_indexes():
+    table = TransformationConfig.__table__
+    index_names = {idx.name for idx in table.indexes}
+
+    expected_indexes = {
+        "ix_transformation_configs_layer_id",
+        "ix_transformation_configs_is_active",
+        "ix_transformation_configs_type",
+        "ix_transformation_configs_layer_active",
+    }
+    for expected in expected_indexes:
+        assert expected in index_names, f"Index {expected} missing from transformation_configs table"
+
+
+def test_calculate_rms_error():
+    assert TransformationConfig.calculate_rms_error([]) == 0.0
+
+    # residuals = [0.03, 0.04] -> sum_sq = 0.0009 + 0.0016 = 0.0025 -> mean = 0.00125 -> sqrt = 0.035355
+    rms = TransformationConfig.calculate_rms_error([0.03, 0.04])
+    assert round(rms, 6) == 0.035355
+
+    # Single residual
+    assert TransformationConfig.calculate_rms_error([0.05]) == 0.05
+
+
+def test_validate_gcp_count():
+    # Helmert 4P: >= 2
+    assert TransformationConfig.validate_gcp_count(TransformationType.HELMERT_4P.value, 1) is False
+    assert TransformationConfig.validate_gcp_count(TransformationType.HELMERT_4P.value, 2) is True
+    assert TransformationConfig.validate_gcp_count(TransformationType.HELMERT_4P.value, 5) is True
+
+    # Affine 6P: >= 3
+    assert TransformationConfig.validate_gcp_count(TransformationType.AFFINE_6P.value, 2) is False
+    assert TransformationConfig.validate_gcp_count(TransformationType.AFFINE_6P.value, 3) is True
+    assert TransformationConfig.validate_gcp_count(TransformationType.AFFINE_6P.value, 6) is True
+
+    # Polynomial 2nd: >= 6
+    assert TransformationConfig.validate_gcp_count(TransformationType.POLYNOMIAL_2ND.value, 5) is False
+    assert TransformationConfig.validate_gcp_count(TransformationType.POLYNOMIAL_2ND.value, 6) is True
+
+    # TPS: >= 4
+    assert TransformationConfig.validate_gcp_count(TransformationType.THIN_PLATE_SPLINE.value, 3) is False
+    assert TransformationConfig.validate_gcp_count(TransformationType.THIN_PLATE_SPLINE.value, 4) is True
+
+
+def test_update_residuals_calculation():
+    layer_id = uuid.uuid4()
+    config = TransformationConfig(
+        layer_id=layer_id,
+        transformation_type=TransformationType.HELMERT_4P.value,
+    )
+    assert config.residual_rms_error == 0.0
+    assert config.max_residual_error is None
+
+    new_gcps = [
+        {"id": "GCP_1", "residual_total_m": 0.02},
+        {"id": "GCP_2", "residual_total_m": -0.04},
+        {"id": "GCP_3", "residual_total_m": 0.03},
+    ]
+    config.update_residuals(new_gcps)
+
+    # residuals: [0.02, -0.04, 0.03] -> sq: [0.0004, 0.0016, 0.0009] -> sum: 0.0029 -> mean: 0.00096667 -> sqrt: ~0.031091
+    assert round(config.residual_rms_error, 4) == 0.0311
+    assert config.max_residual_error == 0.04
+    assert len(config.ground_control_points) == 3
+
+
+def test_activation_lifecycle():
+    layer_id = uuid.uuid4()
+    config = TransformationConfig(
+        layer_id=layer_id,
+        is_active=True,
+    )
+    assert config.is_active is True
+
+    config.deactivate()
+    assert config.is_active is False
+
+    config.activate()
+    assert config.is_active is True
+

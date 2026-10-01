@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import math
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -50,6 +51,7 @@ class TransformationConfig(Base):
         Index("ix_transformation_configs_layer_id", "layer_id"),
         Index("ix_transformation_configs_is_active", "is_active"),
         Index("ix_transformation_configs_type", "transformation_type"),
+        Index("ix_transformation_configs_layer_active", "layer_id", "is_active"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -168,6 +170,66 @@ class TransformationConfig(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+    @staticmethod
+    def calculate_rms_error(residuals: List[float]) -> float:
+        """Calculate Root Mean Square (RMS) error across a sequence of residuals.
+
+        RMS = sqrt( (1 / N) * sum(r_i^2) )
+        """
+        if not residuals:
+            return 0.0
+        sum_sq = sum(float(r) ** 2 for r in residuals)
+        return float(round(math.sqrt(sum_sq / len(residuals)), 6))
+
+    @staticmethod
+    def validate_gcp_count(transformation_type: str, gcp_count: int) -> bool:
+        """Validate whether the number of Ground Control Points satisfies algorithm requirements.
+
+        Minimum Degrees of Freedom:
+        - HELMERT_4P: 2 GCPs (4 equations for 4 unknowns)
+        - AFFINE_6P: 3 GCPs (6 equations for 6 unknowns)
+        - POLYNOMIAL_2ND: 6 GCPs (12 equations for 12 unknowns)
+        - THIN_PLATE_SPLINE: 4 GCPs
+        """
+        min_gcp_map = {
+            TransformationType.HELMERT_4P.value: 2,
+            TransformationType.AFFINE_6P.value: 3,
+            TransformationType.POLYNOMIAL_2ND.value: 6,
+            TransformationType.THIN_PLATE_SPLINE.value: 4,
+        }
+        min_required = min_gcp_map.get(transformation_type, 2)
+        return gcp_count >= min_required
+
+    def update_residuals(self, gcps: Optional[List[Dict[str, Any]]] = None) -> None:
+        """Recalculate and update residual RMS and maximum errors from GCP residual data."""
+        if gcps is not None:
+            self.ground_control_points = gcps
+
+        residuals: List[float] = []
+        for gcp in self.ground_control_points:
+            res = gcp.get("residual_total_m", gcp.get("residual"))
+            if res is not None:
+                residuals.append(float(res))
+
+        if residuals:
+            self.residual_rms_error = self.calculate_rms_error(residuals)
+            self.max_residual_error = float(round(max(abs(r) for r in residuals), 6))
+        else:
+            self.residual_rms_error = 0.0
+            self.max_residual_error = 0.0
+
+        self.updated_at = datetime.now(timezone.utc)
+
+    def activate(self) -> None:
+        """Mark transformation config as active."""
+        self.is_active = True
+        self.updated_at = datetime.now(timezone.utc)
+
+    def deactivate(self) -> None:
+        """Deactivate transformation config."""
+        self.is_active = False
+        self.updated_at = datetime.now(timezone.utc)
 
     def __repr__(self) -> str:
         return (
