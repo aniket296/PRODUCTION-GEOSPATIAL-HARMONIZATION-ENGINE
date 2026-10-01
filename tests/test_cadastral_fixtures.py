@@ -1,15 +1,20 @@
 """Tests for deterministic Everest 1830 cadastral test fixtures, CRS specifications, bounds, and topology."""
 
+import json
+from pathlib import Path
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, shape
 from shapely.ops import unary_union
 
 from fixtures.cadastral_fixtures import (
     EVEREST_1830_CRS,
     UTM_ZONE_43N_CRS,
     WGS84_GEO_CRS,
+    export_fixtures_to_geojson,
+    export_fixtures_to_wkt_mapping,
     generate_clean_cadastral_fixtures,
     get_fixture_bounds,
+    save_fixtures_geojson,
 )
 
 
@@ -70,7 +75,7 @@ def test_parcel_metric_areas_and_compactness():
         # Calculate Polsby-Popper compactness: (4 * pi * A) / P^2
         import math
         polsby_popper = (4.0 * math.pi * area) / (perimeter * perimeter)
-        # Rectangles with aspect ratios 4:5 and 1:1 have Polsby-Popper > 0.75
+        # Rectangles with aspect ratios 4:5 and 1:1 have Polsby-Popper > 0.70
         assert polsby_popper > 0.70, f"Compactness {polsby_popper} unexpectedly low for standard parcel"
 
 
@@ -109,3 +114,87 @@ def test_reprojected_wgs84_and_utm_geometries_valid():
         geom_utm = p["geometry_utm"]
         assert geom_utm.is_valid is True
         assert geom_utm.area > 0
+
+
+def test_parcel_centroids():
+    parcels = generate_clean_cadastral_fixtures()
+
+    for p in parcels:
+        cx_ev, cy_ev = p["centroid_everest"]
+        assert 3600000.0 <= cx_ev <= 3600220.0
+        assert 500000.0 <= cy_ev <= 500100.0
+
+        cx_wgs, cy_wgs = p["centroid_wgs84"]
+        assert 68.0 <= cx_wgs <= 90.0
+        assert 10.0 <= cy_wgs <= 35.0
+
+
+def test_export_fixtures_to_geojson_wgs84():
+    parcels = generate_clean_cadastral_fixtures()
+    fc = export_fixtures_to_geojson(parcels, target_crs=WGS84_GEO_CRS)
+
+    assert fc["type"] == "FeatureCollection"
+    assert len(fc["features"]) == 10
+    assert "crs" not in fc  # RFC 7946 specifies default WGS84 should omit crs member
+
+    for feat in fc["features"]:
+        assert feat["type"] == "Feature"
+        assert feat["geometry"]["type"] == "Polygon"
+        assert len(feat["geometry"]["coordinates"][0]) == 5  # Closed rectangular polygon
+        props = feat["properties"]
+        assert props["export_crs"] == "EPSG:4326"
+        assert props["area_sqm"] > 0
+        assert props["source_crs"] == "EPSG:24378"
+
+
+def test_export_fixtures_to_geojson_projected_crs():
+    parcels = generate_clean_cadastral_fixtures()
+    fc_ev = export_fixtures_to_geojson(parcels, target_crs=EVEREST_1830_CRS)
+
+    assert fc_ev["type"] == "FeatureCollection"
+    assert fc_ev["crs"]["properties"]["name"] == "urn:ogc:def:crs:EPSG::24378"
+    assert len(fc_ev["features"]) == 10
+
+    # First parcel coords should match Everest origin
+    coords = fc_ev["features"][0]["geometry"]["coordinates"][0]
+    assert tuple(coords[0]) == (3600000.0, 500000.0)
+
+
+def test_export_fixtures_to_geojson_invalid_crs():
+    parcels = generate_clean_cadastral_fixtures()
+    with pytest.raises(ValueError, match="Unsupported target CRS"):
+        export_fixtures_to_geojson(parcels, target_crs="EPSG:99999")
+
+
+def test_export_fixtures_to_wkt_mapping():
+    parcels = generate_clean_cadastral_fixtures()
+    records = export_fixtures_to_wkt_mapping(parcels, geometry_key="geometry_everest")
+
+    assert len(records) == 10
+    for r in records:
+        assert "wkt" in r
+        assert r["wkt"].startswith("POLYGON ((")
+        assert r["source_crs"] == "EPSG:24378"
+
+    with pytest.raises(ValueError, match="Invalid geometry_key"):
+        export_fixtures_to_wkt_mapping(parcels, geometry_key="invalid_geom_key")
+
+
+def test_save_and_load_fixtures_geojson(tmp_path: Path):
+    target_file = tmp_path / "fixtures" / "cadastre_sample.geojson"
+    saved_path = save_fixtures_geojson(target_file, target_crs=WGS84_GEO_CRS)
+
+    assert saved_path.exists()
+    assert saved_path.is_file()
+
+    with open(saved_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    assert data["type"] == "FeatureCollection"
+    assert len(data["features"]) == 10
+
+    # Roundtrip geometry validation using shapely.shape
+    for feat in data["features"]:
+        geom = shape(feat["geometry"])
+        assert geom.is_valid is True
+        assert geom.area > 0
