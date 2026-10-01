@@ -1,0 +1,2 @@
+# Docker Service
+Contains multi-stage Dockerfiles and configuration files for PostgreSQL/PostGIS, Redis, MinIO, Backend, and Celery.

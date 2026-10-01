@@ -1,0 +1,2 @@
+# Backend Service
+Contains FastAPI application, GeoAlchemy2/SQLAlchemy models, Celery workers, geodetic & topology algorithms.

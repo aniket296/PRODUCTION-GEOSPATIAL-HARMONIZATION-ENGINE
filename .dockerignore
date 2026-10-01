@@ -1,0 +1,34 @@
+**/.git
+**/.gitignore
+**/.dockerignore
+**/README.md
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python cache & artifacts
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache
+**/.coverage
+**/htmlcov
+**/.venv
+**/venv
+
+# Node & frontend build artifacts
+**/node_modules
+**/frontend/dist
+**/.vite
+
+# OS & Editor
+**/.DS_Store
+**/Thumbs.db
+**/.vscode
+**/.idea
+
+# Data directories and temp files
+**/local_data
+**/*.log
+**/tmp
