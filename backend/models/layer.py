@@ -111,6 +111,11 @@ class RawCadastralLayer(Base):
         back_populates="layer",
         cascade="all, delete-orphan",
     )
+    topology_errors: Mapped[List["TopologicalError"]] = relationship(
+        "TopologicalError",
+        back_populates="layer",
+        cascade="all, delete-orphan",
+    )
 
     def __init__(
         self,
