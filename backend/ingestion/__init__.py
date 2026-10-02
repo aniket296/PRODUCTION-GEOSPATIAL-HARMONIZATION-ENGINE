@@ -22,6 +22,19 @@ from backend.ingestion.geojson_reader import (
     remove_duplicate_consecutive_vertices,
     round_coordinates,
 )
+from backend.ingestion.shapefile_reader import (
+    ShapefileComponentSet,
+    ShapefileCorruptArchiveError,
+    ShapefileExtractionError,
+    ShapefileFeatureRecord,
+    ShapefileIngestionReader,
+    ShapefileIngestionResult,
+    ShapefileMissingComponentError,
+    ShapefileValidationError,
+    parse_prj_to_crs,
+    unpack_shapefile_zip,
+    validate_shapefile_components,
+)
 
 __all__ = [
     "DXFCorruptFileError",
@@ -42,4 +55,15 @@ __all__ = [
     "remove_duplicate_consecutive_vertices",
     "enforce_rfc7946_winding_order",
     "normalize_cadastral_properties",
+    "ShapefileComponentSet",
+    "ShapefileCorruptArchiveError",
+    "ShapefileExtractionError",
+    "ShapefileFeatureRecord",
+    "ShapefileIngestionReader",
+    "ShapefileIngestionResult",
+    "ShapefileMissingComponentError",
+    "ShapefileValidationError",
+    "parse_prj_to_crs",
+    "unpack_shapefile_zip",
+    "validate_shapefile_components",
 ]
