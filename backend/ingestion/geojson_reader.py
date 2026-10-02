@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
-from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.geometry import LinearRing, MultiPolygon, Polygon, shape
 from shapely.geometry.polygon import orient
 from shapely.ops import transform
 
@@ -98,14 +98,86 @@ def round_coordinates(geom: Any, precision: int = 7) -> Any:
     return transform(_round_coords, geom)
 
 
-def enforce_rfc7946_winding_order(geom: Any) -> Any:
-    """Enforce RFC 7946 Right-Hand Rule: exterior ring CCW (+1.0), holes CW (-1.0)."""
+def remove_duplicate_consecutive_vertices(geom: Any) -> Any:
+    """Remove redundant sequential duplicate vertices from Polygon exterior and interior rings."""
     if isinstance(geom, Polygon):
-        return orient(geom, sign=1.0)
+        def _clean_ring(coords: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+            if not coords:
+                return coords
+            cleaned = [coords[0]]
+            for pt in coords[1:]:
+                if pt != cleaned[-1]:
+                    cleaned.append(pt)
+            # Ensure closure
+            if len(cleaned) >= 3 and cleaned[0] != cleaned[-1]:
+                cleaned.append(cleaned[0])
+            return cleaned
+
+        ext_coords = _clean_ring(list(geom.exterior.coords))
+        if len(ext_coords) < 4:
+            return geom  # Degenerate ring, keep as-is for downstream validation flags
+
+        int_coords = []
+        for interior in geom.interiors:
+            cleaned_hole = _clean_ring(list(interior.coords))
+            if len(cleaned_hole) >= 4:
+                int_coords.append(cleaned_hole)
+
+        return Polygon(ext_coords, int_coords)
+
     elif isinstance(geom, MultiPolygon):
-        oriented_parts = [orient(poly, sign=1.0) for poly in geom.geoms]
-        return MultiPolygon(oriented_parts)
+        cleaned_polys = [remove_duplicate_consecutive_vertices(p) for p in geom.geoms]
+        return MultiPolygon(cleaned_polys)
+
     return geom
+
+
+def enforce_rfc7946_winding_order(geom: Any) -> Tuple[Any, bool]:
+    """Enforce RFC 7946 Right-Hand Rule: exterior ring CCW (+1.0), holes CW (-1.0).
+
+    Returns: (oriented_geometry, was_corrected_bool)
+    """
+    was_corrected = False
+    if isinstance(geom, Polygon):
+        if not geom.exterior.is_ccw:
+            was_corrected = True
+        return orient(geom, sign=1.0), was_corrected
+    elif isinstance(geom, MultiPolygon):
+        parts = []
+        for p in geom.geoms:
+            if not p.exterior.is_ccw:
+                was_corrected = True
+            parts.append(orient(p, sign=1.0))
+        return MultiPolygon(parts), was_corrected
+    return geom, was_corrected
+
+
+def normalize_cadastral_properties(props: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract standard cadastral revenue attributes from diverse property key variants."""
+    normalized = dict(props)
+
+    # 1. Khasra / Survey Number
+    if "khasra_number" not in normalized:
+        for k in ("khasra", "khasra_no", "survey_no", "survey_number", "plot_no"):
+            if k in normalized and normalized[k]:
+                normalized["khasra_number"] = str(normalized[k])
+                break
+
+    # 2. Owner Name
+    if "owner_name" not in normalized:
+        for k in ("owner", "khatadar", "holder_name", "applicant"):
+            if k in normalized and normalized[k]:
+                normalized["owner_name"] = str(normalized[k])
+                break
+
+    # 3. Land Use
+    if "land_use" not in normalized:
+        for k in ("landuse", "classification", "category", "purpose"):
+            if k in normalized and normalized[k]:
+                normalized["land_use"] = str(normalized[k])
+                break
+
+    return normalized
 
 
 class GeoJSONIngestionReader:
@@ -118,6 +190,8 @@ class GeoJSONIngestionReader:
         target_crs: Optional[str] = None,
         precision: Optional[int] = None,
         enforce_winding: bool = True,
+        remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> GeoJSONIngestionResult:
         """Parse GeoJSON from an in-memory dictionary."""
         if not isinstance(data, dict):
@@ -143,7 +217,6 @@ class GeoJSONIngestionReader:
         elif geo_type == "Feature":
             raw_features = [data]
         elif geo_type in ("Polygon", "MultiPolygon", "Point", "LineString", "MultiPoint", "MultiLineString"):
-            # Naked geometry root: wrap into single synthetic feature
             raw_features = [{"type": "Feature", "geometry": data, "properties": {}}]
         else:
             raise GeoJSONValidationError(f"Unsupported root GeoJSON type: '{geo_type}'")
@@ -168,18 +241,56 @@ class GeoJSONIngestionReader:
             # Round coordinates and drop Z
             shapely_geom = round_coordinates(shapely_geom, precision=precision)
 
+            # Deduplicate consecutive vertices
+            if remove_duplicates:
+                shapely_geom = remove_duplicate_consecutive_vertices(shapely_geom)
+
             # Orient polygon rings per RFC 7946
+            winding_fixed = False
             if enforce_winding:
-                shapely_geom = enforce_rfc7946_winding_order(shapely_geom)
+                shapely_geom, winding_fixed = enforce_rfc7946_winding_order(shapely_geom)
+
+            feature_id = str(feat.get("id")) if feat.get("id") is not None else None
+            properties = normalize_cadastral_properties(feat.get("properties") or {})
+            if winding_fixed:
+                properties["winding_fixed"] = True
+
+            # Antimeridian check for geodetic WGS84
+            if detected_crs == "EPSG:4326":
+                minx, miny, maxx, maxy = shapely_geom.bounds
+                if (maxx - minx) > 180.0:
+                    properties["antimeridian_crossing"] = True
+                if minx < -180.0 or maxx > 180.0 or miny < -90.0 or maxy > 90.0:
+                    properties["out_of_bounds_wgs84"] = True
+
+            # Explode MultiPolygons if requested
+            if explode_multipolygons and isinstance(shapely_geom, MultiPolygon):
+                for part_idx, part_poly in enumerate(shapely_geom.geoms):
+                    part_id = f"{feature_id}_part{part_idx}" if feature_id else None
+                    part_valid = bool(part_poly.is_valid)
+                    if part_valid:
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+
+                    records.append(
+                        GeoJSONFeatureRecord(
+                            feature_id=part_id,
+                            geometry=part_poly,
+                            properties=dict(properties),
+                            crs=detected_crs,
+                            is_valid=part_valid,
+                            bounds=part_poly.bounds,
+                            area=float(part_poly.area),
+                        )
+                    )
+                continue
 
             is_valid = bool(shapely_geom.is_valid)
             if is_valid:
                 valid_count += 1
             else:
                 invalid_count += 1
-
-            feature_id = str(feat.get("id")) if feat.get("id") is not None else None
-            properties = feat.get("properties") or {}
 
             area_val = float(shapely_geom.area) if hasattr(shapely_geom, "area") else None
 
@@ -220,6 +331,8 @@ class GeoJSONIngestionReader:
         target_crs: Optional[str] = None,
         precision: Optional[int] = None,
         enforce_winding: bool = True,
+        remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> GeoJSONIngestionResult:
         """Parse GeoJSON from a JSON-encoded string."""
         if not text or not text.strip():
@@ -233,6 +346,8 @@ class GeoJSONIngestionReader:
             target_crs=target_crs,
             precision=precision,
             enforce_winding=enforce_winding,
+            remove_duplicates=remove_duplicates,
+            explode_multipolygons=explode_multipolygons,
         )
 
     @classmethod
@@ -242,6 +357,8 @@ class GeoJSONIngestionReader:
         target_crs: Optional[str] = None,
         precision: Optional[int] = None,
         enforce_winding: bool = True,
+        remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> GeoJSONIngestionResult:
         """Parse GeoJSON from byte stream."""
         if not raw_bytes:
@@ -258,6 +375,8 @@ class GeoJSONIngestionReader:
             target_crs=target_crs,
             precision=precision,
             enforce_winding=enforce_winding,
+            remove_duplicates=remove_duplicates,
+            explode_multipolygons=explode_multipolygons,
         )
 
     @classmethod
@@ -267,6 +386,8 @@ class GeoJSONIngestionReader:
         target_crs: Optional[str] = None,
         precision: Optional[int] = None,
         enforce_winding: bool = True,
+        remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> GeoJSONIngestionResult:
         """Parse GeoJSON from a file on disk."""
         path = Path(file_path)
@@ -278,4 +399,26 @@ class GeoJSONIngestionReader:
             target_crs=target_crs,
             precision=precision,
             enforce_winding=enforce_winding,
+            remove_duplicates=remove_duplicates,
+            explode_multipolygons=explode_multipolygons,
         )
+
+    @classmethod
+    def iter_features_from_file(
+        cls,
+        file_path: Union[str, Path],
+        target_crs: Optional[str] = None,
+        precision: Optional[int] = None,
+        enforce_winding: bool = True,
+        remove_duplicates: bool = True,
+    ) -> Generator[GeoJSONFeatureRecord, None, None]:
+        """Stream features one by one from a GeoJSON file."""
+        res = cls.read_from_file(
+            file_path,
+            target_crs=target_crs,
+            precision=precision,
+            enforce_winding=enforce_winding,
+            remove_duplicates=remove_duplicates,
+        )
+        for f in res.features:
+            yield f

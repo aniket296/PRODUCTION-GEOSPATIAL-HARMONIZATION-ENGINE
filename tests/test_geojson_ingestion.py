@@ -14,6 +14,8 @@ from backend.ingestion.geojson_reader import (
     GeoJSONValidationError,
     enforce_rfc7946_winding_order,
     extract_crs_from_geojson,
+    normalize_cadastral_properties,
+    remove_duplicate_consecutive_vertices,
     round_coordinates,
 )
 from fixtures.cadastral_fixtures import (
@@ -75,12 +77,31 @@ def test_round_coordinates_precision():
     assert py0 == 500000.679
 
 
+def test_remove_duplicate_consecutive_vertices():
+    # Polygon with consecutive duplicate vertices: [(0,0), (0,0), (10,0), (10,10), (10,10), (0,10), (0,0)]
+    poly_with_dupes = Polygon([
+        (0.0, 0.0),
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 10.0),
+        (10.0, 10.0),
+        (0.0, 10.0),
+        (0.0, 0.0),
+    ])
+    assert len(poly_with_dupes.exterior.coords) == 7
+
+    cleaned = remove_duplicate_consecutive_vertices(poly_with_dupes)
+    assert len(cleaned.exterior.coords) == 5
+    assert cleaned.area == 100.0
+
+
 def test_enforce_rfc7946_winding_order():
     # CW polygon exterior ring: [(0,0), (0,1), (1,1), (1,0), (0,0)]
     cw_poly = Polygon([(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)])
     assert not cw_poly.exterior.is_ccw  # Clockwise
 
-    ccw_poly = enforce_rfc7946_winding_order(cw_poly)
+    ccw_poly, corrected = enforce_rfc7946_winding_order(cw_poly)
+    assert corrected is True
     assert ccw_poly.exterior.is_ccw  # Enforced counterclockwise per RFC 7946
     assert ccw_poly.is_valid is True
     assert ccw_poly.area == 1.0
@@ -127,7 +148,6 @@ def test_read_projected_cadastral_fixtures_geojson():
     # Ensure projected coordinates rounded to millimeter (3 decimals)
     for feat in result.features:
         for x, y in feat.geometry.exterior.coords:
-            # Check coordinate doesn't have excess floating point noise beyond 3 decimals
             assert round(x, 3) == x
             assert round(y, 3) == y
 
@@ -157,6 +177,77 @@ def test_read_from_bytes_and_file(tmp_path: Path):
     assert result_file.valid_count == 10
 
 
+def test_iter_features_from_file(tmp_path: Path):
+    target_file = tmp_path / "stream_records.geojson"
+    save_fixtures_geojson(target_file, target_crs=WGS84_GEO_CRS)
+
+    streamed_records = list(GeoJSONIngestionReader.iter_features_from_file(target_file))
+    assert len(streamed_records) == 10
+    for r in streamed_records:
+        assert isinstance(r, GeoJSONFeatureRecord)
+        assert r.is_valid is True
+
+
+def test_explode_multipolygons():
+    multi_poly_doc = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "id": "PARCEL-COMPLEX",
+                "geometry": {
+                    "type": "MultiPolygon",
+                    "coordinates": [
+                        [[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]]],
+                        [[[20.0, 0.0], [30.0, 0.0], [30.0, 10.0], [20.0, 10.0], [20.0, 0.0]]],
+                    ],
+                },
+                "properties": {"khasra_no": "505"},
+            }
+        ],
+    }
+
+    # With explode_multipolygons = True
+    exploded = GeoJSONIngestionReader.read_from_dict(multi_poly_doc, explode_multipolygons=True)
+    assert exploded.total_count == 2
+    assert exploded.features[0].feature_id == "PARCEL-COMPLEX_part0"
+    assert exploded.features[1].feature_id == "PARCEL-COMPLEX_part1"
+    assert isinstance(exploded.features[0].geometry, Polygon)
+
+    # With explode_multipolygons = False
+    unexploded = GeoJSONIngestionReader.read_from_dict(multi_poly_doc, explode_multipolygons=False)
+    assert unexploded.total_count == 1
+    assert isinstance(unexploded.features[0].geometry, MultiPolygon)
+
+
+def test_normalize_cadastral_properties():
+    raw_props = {
+        "survey_no": "123/A",
+        "khatadar": "Ramesh Chandra",
+        "landuse": "Agricultural",
+        "village_code": "09876",
+    }
+    norm = normalize_cadastral_properties(raw_props)
+    assert norm["khasra_number"] == "123/A"
+    assert norm["owner_name"] == "Ramesh Chandra"
+    assert norm["land_use"] == "Agricultural"
+    assert norm["village_code"] == "09876"
+
+
+def test_antimeridian_and_out_of_bounds_flags():
+    # Feature spanning antimeridian (from lon -179 to +179)
+    antimeridian_doc = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [[[-179.0, 0.0], [179.0, 0.0], [179.0, 10.0], [-179.0, 10.0], [-179.0, 0.0]]],
+        },
+        "properties": {},
+    }
+    res = GeoJSONIngestionReader.read_from_dict(antimeridian_doc, target_crs="EPSG:4326")
+    assert res.features[0].properties.get("antimeridian_crossing") is True
+
+
 def test_naked_geometry_and_single_feature():
     single_feat = {
         "type": "Feature",
@@ -170,6 +261,7 @@ def test_naked_geometry_and_single_feature():
     res_feat = GeoJSONIngestionReader.read_from_dict(single_feat)
     assert res_feat.total_count == 1
     assert res_feat.features[0].feature_id == "PARCEL-001"
+    assert res_feat.features[0].properties["khasra_number"] == "1"
 
     naked_geom = {
         "type": "Polygon",

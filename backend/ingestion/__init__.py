@@ -18,6 +18,8 @@ from backend.ingestion.geojson_reader import (
     GeoJSONValidationError,
     enforce_rfc7946_winding_order,
     extract_crs_from_geojson,
+    normalize_cadastral_properties,
+    remove_duplicate_consecutive_vertices,
     round_coordinates,
 )
 
@@ -37,5 +39,7 @@ __all__ = [
     "GeoJSONValidationError",
     "extract_crs_from_geojson",
     "round_coordinates",
+    "remove_duplicate_consecutive_vertices",
     "enforce_rfc7946_winding_order",
+    "normalize_cadastral_properties",
 ]
