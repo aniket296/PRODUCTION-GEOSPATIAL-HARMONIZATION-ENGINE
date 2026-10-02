@@ -7,7 +7,7 @@ import io
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, Generator, List, Optional, Set, Tuple, Union
 import zipfile
 
 import pyproj
@@ -64,6 +64,18 @@ class ShapefileComponentSet:
             d["cpg"] = str(self.cpg_path)
         return d
 
+    def get_file_sizes(self) -> Dict[str, int]:
+        sizes = {
+            "shp": self.shp_path.stat().st_size,
+            "shx": self.shx_path.stat().st_size,
+            "dbf": self.dbf_path.stat().st_size,
+        }
+        if self.prj_path and self.prj_path.exists():
+            sizes["prj"] = self.prj_path.stat().st_size
+        if self.cpg_path and self.cpg_path.exists():
+            sizes["cpg"] = self.cpg_path.stat().st_size
+        return sizes
+
 
 @dataclass
 class ShapefileFeatureRecord:
@@ -87,6 +99,7 @@ class ShapefileIngestionResult:
     invalid_count: int
     bounds: Optional[Tuple[float, float, float, float]]
     components: Dict[str, str] = field(default_factory=dict)
+    component_sizes: Dict[str, int] = field(default_factory=dict)
 
 
 def parse_prj_to_crs(prj_text: str) -> str:
@@ -102,7 +115,6 @@ def parse_prj_to_crs(prj_text: str) -> str:
         epsg_code = crs.to_epsg()
         if epsg_code:
             return f"EPSG:{epsg_code}"
-        # Try authority name + code
         auth_name = crs.to_authority()
         if auth_name:
             return f"{auth_name[0]}:{auth_name[1]}"
@@ -113,6 +125,8 @@ def parse_prj_to_crs(prj_text: str) -> str:
     upper_prj = cleaned_prj.upper()
     if "KALIANPUR" in upper_prj or "INDIA ZONE IIA" in upper_prj or "24378" in upper_prj:
         return "EPSG:24378"
+    if "INDIA ZONE IIB" in upper_prj or "24379" in upper_prj:
+        return "EPSG:24379"
     if "UTM ZONE 43N" in upper_prj or "UTM_ZONE_43N" in upper_prj or "32643" in upper_prj:
         return "EPSG:32643"
     if "WGS_1984" in upper_prj or "WGS 84" in upper_prj or "4326" in upper_prj:
@@ -126,6 +140,23 @@ def parse_prj_to_crs(prj_text: str) -> str:
     return "EPSG:4326"
 
 
+def detect_cpg_encoding(cpg_path: Optional[Path]) -> str:
+    """Read code page file (.cpg) if present to determine DBF text encoding."""
+    if not cpg_path or not cpg_path.exists():
+        return "utf-8"
+    try:
+        raw = cpg_path.read_text(encoding="utf-8", errors="ignore").strip().lower()
+        if "utf" in raw or "utf-8" in raw:
+            return "utf-8"
+        if "1252" in raw or "ansi" in raw:
+            return "cp1252"
+        if "latin" in raw or "8859" in raw:
+            return "iso-8859-1"
+        return raw or "utf-8"
+    except Exception:
+        return "utf-8"
+
+
 def validate_shapefile_components(
     file_paths: List[Path],
     base_name: Optional[str] = None,
@@ -134,7 +165,6 @@ def validate_shapefile_components(
     if not file_paths:
         raise ShapefileMissingComponentError("No files provided for Shapefile component validation")
 
-    # Group files by stem (case-insensitive)
     stem_map: Dict[str, Dict[str, Path]] = {}
     for p in file_paths:
         stem = p.stem.lower()
@@ -151,7 +181,6 @@ def validate_shapefile_components(
             )
         chosen_stem = target_stem
     else:
-        # Pick the first stem that contains .shp
         shp_stems = [s for s, exts in stem_map.items() if ".shp" in exts]
         if not shp_stems:
             raise ShapefileMissingComponentError("Missing mandatory geometry component: .shp")
@@ -163,7 +192,6 @@ def validate_shapefile_components(
 
     components = stem_map[chosen_stem]
 
-    # Check mandatory components
     if ".shp" not in components:
         raise ShapefileMissingComponentError(f"Missing mandatory geometry component: {chosen_stem}.shp")
     if ".shx" not in components:
@@ -201,7 +229,7 @@ def unpack_shapefile_zip(
     except Exception as exc:
         raise ShapefileCorruptArchiveError(f"Failed to unpack ZIP archive: {exc}") from exc
 
-    # Recursively find all extracted files
+    # Recursively find all extracted files across any nested folders
     all_files = [p for p in extract_dir.rglob("*") if p.is_file()]
     return validate_shapefile_components(all_files, base_name=base_name)
 
@@ -215,11 +243,12 @@ class ShapefileIngestionReader:
         component_set: ShapefileComponentSet,
         target_crs: Optional[str] = None,
         precision: Optional[int] = None,
+        encoding: Optional[str] = None,
         enforce_winding: bool = True,
         remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> ShapefileIngestionResult:
         """Parse features from a validated ShapefileComponentSet."""
-        # Detect CRS from .prj if available
         if target_crs:
             detected_crs = target_crs
         elif component_set.prj_path and component_set.prj_path.exists():
@@ -231,21 +260,37 @@ class ShapefileIngestionReader:
         if precision is None:
             precision = 7 if detected_crs == "EPSG:4326" else 3
 
+        resolved_encoding = encoding or detect_cpg_encoding(component_set.cpg_path)
+
         # Read using pyshp
         try:
             with shapefile.Reader(
                 shp=str(component_set.shp_path),
                 shx=str(component_set.shx_path),
                 dbf=str(component_set.dbf_path),
+                encoding=resolved_encoding,
             ) as reader:
                 shape_records = reader.shapeRecords()
                 if not shape_records:
                     raise ShapefileValidationError("Shapefile contains 0 feature records")
-                fields = [f[0] for f in reader.fields[1:]]  # Exclude deletion flag field
+                fields = [f[0] for f in reader.fields[1:]]
         except ShapefileValidationError:
             raise
-        except Exception as exc:
-            raise ShapefileValidationError(f"Failed to open Shapefile with pyshp: {exc}") from exc
+        except Exception:
+            # Fallback encoding to latin-1 if configured encoding fails on legacy bytes
+            try:
+                with shapefile.Reader(
+                    shp=str(component_set.shp_path),
+                    shx=str(component_set.shx_path),
+                    dbf=str(component_set.dbf_path),
+                    encoding="latin-1",
+                ) as reader:
+                    shape_records = reader.shapeRecords()
+                    if not shape_records:
+                        raise ShapefileValidationError("Shapefile contains 0 feature records")
+                    fields = [f[0] for f in reader.fields[1:]]
+            except Exception as exc:
+                raise ShapefileValidationError(f"Failed to open Shapefile with pyshp: {exc}") from exc
 
         records: List[ShapefileFeatureRecord] = []
         valid_count = 0
@@ -253,13 +298,12 @@ class ShapefileIngestionReader:
 
         for idx, sr in enumerate(shape_records):
             shp_geom = sr.shape
-            # Convert pyshp shape to Shapely geometry via __geo_interface__
             try:
                 raw_geom = shape(shp_geom.__geo_interface__)
             except Exception as exc:
                 raise ShapefileValidationError(f"Invalid geometry at index {idx}: {exc}") from exc
 
-            # Round coordinates
+            # Round coordinates and drop Z/M coordinates
             cleaned_geom = round_coordinates(raw_geom, precision=precision)
 
             # Deduplicate consecutive vertices
@@ -270,19 +314,42 @@ class ShapefileIngestionReader:
             if enforce_winding:
                 cleaned_geom, _ = enforce_rfc7946_winding_order(cleaned_geom)
 
-            is_valid = bool(cleaned_geom.is_valid)
-            if is_valid:
-                valid_count += 1
-            else:
-                invalid_count += 1
-
-            # Extract properties from DBF record
             raw_props = {f: sr.record[i] for i, f in enumerate(fields)}
             props = normalize_cadastral_properties(raw_props)
 
             feature_id = (
                 str(props.get("khasra_number") or props.get("parcel_id") or f"FEAT-{idx + 1}")
             )
+
+            # Handle MultiPolygon exploding if enabled
+            if explode_multipolygons and isinstance(cleaned_geom, MultiPolygon):
+                for part_idx, part_poly in enumerate(cleaned_geom.geoms):
+                    part_id = f"{feature_id}_part{part_idx}"
+                    part_valid = bool(part_poly.is_valid)
+                    if part_valid:
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+
+                    records.append(
+                        ShapefileFeatureRecord(
+                            feature_id=part_id,
+                            geometry=part_poly,
+                            properties=dict(props),
+                            crs=detected_crs,
+                            is_valid=part_valid,
+                            bounds=part_poly.bounds,
+                            area=float(part_poly.area),
+                        )
+                    )
+                continue
+
+            is_valid = bool(cleaned_geom.is_valid)
+            if is_valid:
+                valid_count += 1
+            else:
+                invalid_count += 1
+
             area_val = float(cleaned_geom.area) if hasattr(cleaned_geom, "area") else None
 
             feat_rec = ShapefileFeatureRecord(
@@ -311,6 +378,7 @@ class ShapefileIngestionReader:
             invalid_count=invalid_count,
             bounds=global_bounds,
             components=component_set.as_dict(),
+            component_sizes=component_set.get_file_sizes(),
         )
 
     @classmethod
@@ -320,8 +388,10 @@ class ShapefileIngestionReader:
         target_crs: Optional[str] = None,
         base_name: Optional[str] = None,
         precision: Optional[int] = None,
+        encoding: Optional[str] = None,
         enforce_winding: bool = True,
         remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> ShapefileIngestionResult:
         """Extract and parse Shapefile from a ZIP archive or bytes stream."""
         with tempfile.TemporaryDirectory(prefix="shp_ingest_") as tmp_dir:
@@ -331,8 +401,10 @@ class ShapefileIngestionReader:
                 comp_set,
                 target_crs=target_crs,
                 precision=precision,
+                encoding=encoding,
                 enforce_winding=enforce_winding,
                 remove_duplicates=remove_duplicates,
+                explode_multipolygons=explode_multipolygons,
             )
 
     @classmethod
@@ -342,8 +414,10 @@ class ShapefileIngestionReader:
         target_crs: Optional[str] = None,
         base_name: Optional[str] = None,
         precision: Optional[int] = None,
+        encoding: Optional[str] = None,
         enforce_winding: bool = True,
         remove_duplicates: bool = True,
+        explode_multipolygons: bool = False,
     ) -> ShapefileIngestionResult:
         """Parse Shapefile from a filesystem directory."""
         dir_path = Path(directory)
@@ -355,6 +429,32 @@ class ShapefileIngestionReader:
             comp_set,
             target_crs=target_crs,
             precision=precision,
+            encoding=encoding,
+            enforce_winding=enforce_winding,
+            remove_duplicates=remove_duplicates,
+            explode_multipolygons=explode_multipolygons,
+        )
+
+    @classmethod
+    def iter_features_from_zip(
+        cls,
+        zip_source: Union[bytes, Path, str],
+        target_crs: Optional[str] = None,
+        base_name: Optional[str] = None,
+        precision: Optional[int] = None,
+        encoding: Optional[str] = None,
+        enforce_winding: bool = True,
+        remove_duplicates: bool = True,
+    ) -> Generator[ShapefileFeatureRecord, None, None]:
+        """Stream features one by one from a Shapefile ZIP archive."""
+        res = cls.read_from_zip(
+            zip_source,
+            target_crs=target_crs,
+            base_name=base_name,
+            precision=precision,
+            encoding=encoding,
             enforce_winding=enforce_winding,
             remove_duplicates=remove_duplicates,
         )
+        for f in res.features:
+            yield f

@@ -4,16 +4,18 @@ import io
 from pathlib import Path
 import zipfile
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
 import shapefile  # pyshp
 
 from backend.ingestion.shapefile_reader import (
     ShapefileComponentSet,
     ShapefileCorruptArchiveError,
+    ShapefileFeatureRecord,
     ShapefileIngestionReader,
     ShapefileIngestionResult,
     ShapefileMissingComponentError,
     ShapefileValidationError,
+    detect_cpg_encoding,
     parse_prj_to_crs,
     unpack_shapefile_zip,
     validate_shapefile_components,
@@ -52,8 +54,9 @@ def _create_sample_shapefile_on_disk(
     output_dir: Path,
     base_name: str = "cadastre_sample",
     prj_content: str = EVEREST_1830_PRJ,
+    cpg_content: str = "UTF-8",
 ) -> ShapefileComponentSet:
-    """Helper to generate a complete valid Shapefile (.shp, .shx, .dbf, .prj) on disk."""
+    """Helper to generate a complete valid Shapefile (.shp, .shx, .dbf, .prj, .cpg) on disk."""
     output_dir.mkdir(parents=True, exist_ok=True)
     shp_base = str(output_dir / base_name)
 
@@ -81,6 +84,10 @@ def _create_sample_shapefile_on_disk(
     prj_path = output_dir / f"{base_name}.prj"
     prj_path.write_text(prj_content, encoding="utf-8")
 
+    # Write .cpg
+    cpg_path = output_dir / f"{base_name}.cpg"
+    cpg_path.write_text(cpg_content, encoding="utf-8")
+
     all_files = [p for p in output_dir.glob("*") if p.is_file()]
     return validate_shapefile_components(all_files, base_name=base_name)
 
@@ -93,6 +100,22 @@ def test_parse_prj_to_crs():
     assert parse_prj_to_crs("UNKNOWN_PROJECTION_STRING") == "EPSG:4326"
 
 
+def test_detect_cpg_encoding(tmp_path: Path):
+    assert detect_cpg_encoding(None) == "utf-8"
+
+    cpg_utf8 = tmp_path / "utf8.cpg"
+    cpg_utf8.write_text("UTF-8")
+    assert detect_cpg_encoding(cpg_utf8) == "utf-8"
+
+    cpg_ansi = tmp_path / "ansi.cpg"
+    cpg_ansi.write_text("1252")
+    assert detect_cpg_encoding(cpg_ansi) == "cp1252"
+
+    cpg_latin = tmp_path / "latin.cpg"
+    cpg_latin.write_text("ISO-8859-1")
+    assert detect_cpg_encoding(cpg_latin) == "iso-8859-1"
+
+
 def test_validate_shapefile_components_success(tmp_path: Path):
     comp_set = _create_sample_shapefile_on_disk(tmp_path / "valid_shp")
     assert comp_set.base_name == "cadastre_sample"
@@ -100,9 +123,14 @@ def test_validate_shapefile_components_success(tmp_path: Path):
     assert comp_set.shx_path.exists()
     assert comp_set.dbf_path.exists()
     assert comp_set.prj_path is not None and comp_set.prj_path.exists()
+    assert comp_set.cpg_path is not None and comp_set.cpg_path.exists()
 
     d = comp_set.as_dict()
-    assert "shp" in d and "shx" in d and "dbf" in d and "prj" in d
+    assert "shp" in d and "shx" in d and "dbf" in d and "prj" in d and "cpg" in d
+
+    sizes = comp_set.get_file_sizes()
+    assert sizes["shp"] > 0
+    assert sizes["dbf"] > 0
 
 
 def test_validate_shapefile_missing_shp(tmp_path: Path):
@@ -172,6 +200,21 @@ def test_unpack_shapefile_zip(tmp_path: Path):
     assert comp_set.dbf_path.exists()
 
 
+def test_unpack_nested_subdirectories_in_zip(tmp_path: Path):
+    shp_dir = tmp_path / "nested_raw"
+    _create_sample_shapefile_on_disk(shp_dir, base_name="cadastre_nested")
+
+    zip_path = tmp_path / "nested.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for f in shp_dir.glob("cadastre_nested.*"):
+            zf.write(f, arcname=f"subfolder/deep/{f.name}")
+
+    extract_dir = tmp_path / "nested_unpacked"
+    comp_set = unpack_shapefile_zip(zip_path, extract_dir=extract_dir)
+    assert comp_set.base_name == "cadastre_nested"
+    assert comp_set.shp_path.exists()
+
+
 def test_unpack_corrupt_zip(tmp_path: Path):
     corrupt_zip = tmp_path / "corrupt.zip"
     corrupt_zip.write_bytes(b"THIS_IS_NOT_A_VALID_ZIP_HEADER")
@@ -189,6 +232,7 @@ def test_read_shapefile_from_directory(tmp_path: Path):
     assert result.total_count == 10
     assert result.valid_count == 10
     assert result.detected_crs == "EPSG:24378"
+    assert "shp" in result.component_sizes
 
     for feat in result.features:
         assert isinstance(feat.geometry, Polygon)
@@ -221,3 +265,19 @@ def test_read_shapefile_from_zip(tmp_path: Path):
     assert result.detected_crs == "EPSG:32643"
     assert result.valid_count == 10
     assert result.invalid_count == 0
+
+
+def test_iter_features_from_zip(tmp_path: Path):
+    shp_dir = tmp_path / "iter_source"
+    _create_sample_shapefile_on_disk(shp_dir, base_name="parcels", prj_content=WGS84_PRJ)
+
+    zip_path = tmp_path / "iter_parcels.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        for f in shp_dir.glob("parcels.*"):
+            zf.write(f, arcname=f.name)
+
+    features = list(ShapefileIngestionReader.iter_features_from_zip(zip_path))
+    assert len(features) == 10
+    for feat in features:
+        assert isinstance(feat, ShapefileFeatureRecord)
+        assert feat.is_valid is True

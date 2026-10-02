@@ -31,6 +31,7 @@ from backend.ingestion.shapefile_reader import (
     ShapefileIngestionResult,
     ShapefileMissingComponentError,
     ShapefileValidationError,
+    detect_cpg_encoding,
     parse_prj_to_crs,
     unpack_shapefile_zip,
     validate_shapefile_components,
@@ -64,6 +65,7 @@ __all__ = [
     "ShapefileMissingComponentError",
     "ShapefileValidationError",
     "parse_prj_to_crs",
+    "detect_cpg_encoding",
     "unpack_shapefile_zip",
     "validate_shapefile_components",
 ]
