@@ -17,8 +17,12 @@ from backend.ingestion.flatgeobuf_reader import (
     FlatGeobufIngestionReader,
     FlatGeobufIngestionResult,
     FlatGeobufInvalidMagicError,
+    build_packed_r_tree,
     build_synthetic_fgb_payload,
+    decode_feature_geometry,
+    decode_feature_properties,
     parse_fgb_header,
+    serialize_feature,
 )
 from backend.ingestion.geojson_reader import (
     GeoJSONCorruptFileError,
@@ -88,6 +92,10 @@ __all__ = [
     "FlatGeobufIngestionReader",
     "FlatGeobufIngestionResult",
     "FlatGeobufInvalidMagicError",
+    "build_packed_r_tree",
     "build_synthetic_fgb_payload",
+    "decode_feature_geometry",
+    "decode_feature_properties",
     "parse_fgb_header",
+    "serialize_feature",
 ]

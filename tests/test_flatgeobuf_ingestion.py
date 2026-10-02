@@ -202,3 +202,151 @@ def test_flatgeobuf_reader_nonexistent_and_corrupt_files(tmp_path: Path):
     corrupt_file.write_bytes(b"short")
     with pytest.raises(FlatGeobufCorruptHeaderError):
         FlatGeobufIngestionReader.read_header_from_file(corrupt_file)
+
+
+def test_packed_r_tree_builder_and_query():
+    """Verify packed R-tree builder creates valid searchable index buffer."""
+    from backend.ingestion.flatgeobuf_reader import build_packed_r_tree
+    from flatgeobuf.packedrtree import PackedRTree, calc_tree_size
+
+    items = [
+        (0.0, 0.0, 10.0, 10.0, 0),
+        (20.0, 20.0, 30.0, 30.0, 150),
+        (40.0, 40.0, 50.0, 50.0, 300),
+        (60.0, 60.0, 70.0, 70.0, 450),
+    ]
+
+    tree_bytes = build_packed_r_tree(items, node_size=2)
+    assert len(tree_bytes) == calc_tree_size(4, 2)
+
+    # Search for box intersecting item 1
+    rtree = PackedRTree(4, 2, [18.0, 18.0, 25.0, 25.0])
+    results = list(rtree.stream_search(lambda offset, size: tree_bytes[offset : offset + size]))
+    assert len(results) == 1
+    assert results[0][0] == 150  # Offset of item 1
+
+
+def test_flatgeobuf_spatial_index_bbox_filtering(tmp_path: Path):
+    """Verify spatial index search retrieves only features intersecting requested bounding box."""
+    from shapely.geometry import Polygon
+
+    # 4 distinct parcels across a grid
+    poly_a = Polygon([(100.0, 100.0), (150.0, 100.0), (150.0, 150.0), (100.0, 150.0), (100.0, 100.0)])
+    props_a = {"khasra_no": "A-1", "owner_name": "Farmer Ram", "area_sqm": 2500.0}
+
+    poly_b = Polygon([(200.0, 200.0), (250.0, 200.0), (250.0, 250.0), (200.0, 250.0), (200.0, 200.0)])
+    props_b = {"khasra_no": "B-2", "owner_name": "Farmer Shyam", "area_sqm": 2500.0}
+
+    poly_c = Polygon([(300.0, 300.0), (350.0, 300.0), (350.0, 350.0), (300.0, 350.0), (300.0, 300.0)])
+    props_c = {"khasra_no": "C-3", "owner_name": "Farmer Mohan", "area_sqm": 2500.0}
+
+    poly_d = Polygon([(400.0, 400.0), (450.0, 400.0), (450.0, 450.0), (400.0, 450.0), (400.0, 400.0)])
+    props_d = {"khasra_no": "D-4", "owner_name": "Farmer Geeta", "area_sqm": 2500.0}
+
+    features_data = [
+        (poly_a, props_a),
+        (poly_b, props_b),
+        (poly_c, props_c),
+        (poly_d, props_d),
+    ]
+
+    fgb_bytes = build_synthetic_fgb_payload(
+        name="punjab_cadastre",
+        crs_code=24378,
+        index_node_size=2,
+        features_data=features_data,
+    )
+
+    fgb_file = tmp_path / "punjab_cadastre.fgb"
+    fgb_file.write_bytes(fgb_bytes)
+
+    # 1. Read all features without bbox
+    all_res = FlatGeobufIngestionReader.read_from_file(fgb_file)
+    assert len(all_res.features) == 4
+    assert [f.properties["khasra_no"] for f in all_res.features] == ["A-1", "B-2", "C-3", "D-4"]
+    assert all_res.has_spatial_index is True
+
+    # 2. Query bbox that covers only parcel B
+    bbox_b = (180.0, 180.0, 260.0, 260.0)
+    res_b = FlatGeobufIngestionReader.read_from_file(fgb_file, bbox=bbox_b)
+    assert len(res_b.features) == 1
+    assert res_b.features[0].properties["khasra_no"] == "B-2"
+    assert res_b.features[0].properties["owner_name"] == "Farmer Shyam"
+
+    # 3. Query bbox covering parcel B and parcel C
+    bbox_bc = (180.0, 180.0, 360.0, 360.0)
+    res_bc = FlatGeobufIngestionReader.read_from_file(fgb_file, bbox=bbox_bc)
+    assert len(res_bc.features) == 2
+    assert {f.properties["khasra_no"] for f in res_bc.features} == {"B-2", "C-3"}
+
+    # 4. Query disjoint bbox
+    bbox_empty = (800.0, 800.0, 900.0, 900.0)
+    res_empty = FlatGeobufIngestionReader.read_from_file(fgb_file, bbox=bbox_empty)
+    assert len(res_empty.features) == 0
+
+    # 5. Query using read_from_bytes with bbox
+    res_bytes_b = FlatGeobufIngestionReader.read_from_bytes(fgb_bytes, bbox=bbox_b)
+    assert len(res_bytes_b.features) == 1
+    assert res_bytes_b.features[0].properties["khasra_no"] == "B-2"
+
+
+def test_flatgeobuf_streaming_iterator(tmp_path: Path):
+    """Verify iter_features_from_file stream generator yields records one by one."""
+    from shapely.geometry import Polygon
+
+    parcels = [
+        (Polygon([(i * 10, 0), (i * 10 + 8, 0), (i * 10 + 8, 8), (i * 10, 8), (i * 10, 0)]), {"khasra_no": f"K-{i}"})
+        for i in range(5)
+    ]
+    fgb_payload = build_synthetic_fgb_payload(
+        name="streaming_test",
+        features_data=parcels,
+        index_node_size=2,
+    )
+    fgb_path = tmp_path / "streaming.fgb"
+    fgb_path.write_bytes(fgb_payload)
+
+    streamed_records = list(FlatGeobufIngestionReader.iter_features_from_file(fgb_path))
+    assert len(streamed_records) == 5
+    for i, rec in enumerate(streamed_records):
+        assert rec.properties["khasra_no"] == f"K-{i}"
+        assert rec.is_valid is True
+        assert rec.area == pytest.approx(64.0)
+
+
+def test_flatgeobuf_geometry_cleaning_and_winding_order():
+    """Verify polygon winding order correction, vertex deduplication, and coordinate rounding."""
+    from shapely.geometry import Polygon
+    from backend.ingestion.flatgeobuf_reader import serialize_feature, decode_feature_geometry, decode_feature_properties
+    import flatgeobuf.FlatGeobuf.Feature as FeatureFB
+    import flatgeobuf.FlatGeobuf.ColumnType as ColType
+
+    # Clockwise polygon with duplicate vertex
+    cw_poly = Polygon([
+        (10.0, 10.0),
+        (10.0, 20.0),
+        (20.0, 20.0),
+        (20.0, 20.0),  # Duplicate vertex
+        (20.0, 10.0),
+        (10.0, 10.0),
+    ])
+    props = {"khasra_no": "CW-1", "owner_name": "Test"}
+    cols = [("khasra_no", ColType.ColumnType.String), ("owner_name", ColType.ColumnType.String)]
+
+    raw_feat = serialize_feature(cw_poly, props, cols)
+    payload = build_synthetic_fgb_payload(
+        name="winding_test",
+        features_data=[(cw_poly, props)],
+        index_node_size=0,
+    )
+
+    res = FlatGeobufIngestionReader.read_from_bytes(payload)
+    assert len(res.features) == 1
+    f = res.features[0]
+    assert f.is_valid is True
+    assert f.area == pytest.approx(100.0)
+    # RFC 7946 specifies exterior ring is counter-clockwise
+    assert f.geometry.exterior.is_ccw is True
+    # Duplicate vertex removed: 4 corners + closing vertex = 5 coordinates
+    assert len(f.geometry.exterior.coords) == 5
+
