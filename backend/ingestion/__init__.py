@@ -8,6 +8,18 @@ from backend.ingestion.dxf_reader import (
     DXFIngestionReader,
     DXFIngestionResult,
 )
+from backend.ingestion.flatgeobuf_reader import (
+    FlatGeobufCorruptHeaderError,
+    FlatGeobufEmptyFileError,
+    FlatGeobufExtractionError,
+    FlatGeobufFeatureRecord,
+    FlatGeobufHeader,
+    FlatGeobufIngestionReader,
+    FlatGeobufIngestionResult,
+    FlatGeobufInvalidMagicError,
+    build_synthetic_fgb_payload,
+    parse_fgb_header,
+)
 from backend.ingestion.geojson_reader import (
     GeoJSONCorruptFileError,
     GeoJSONEmptyFileError,
@@ -68,4 +80,14 @@ __all__ = [
     "detect_cpg_encoding",
     "unpack_shapefile_zip",
     "validate_shapefile_components",
+    "FlatGeobufCorruptHeaderError",
+    "FlatGeobufEmptyFileError",
+    "FlatGeobufExtractionError",
+    "FlatGeobufFeatureRecord",
+    "FlatGeobufHeader",
+    "FlatGeobufIngestionReader",
+    "FlatGeobufIngestionResult",
+    "FlatGeobufInvalidMagicError",
+    "build_synthetic_fgb_payload",
+    "parse_fgb_header",
 ]
