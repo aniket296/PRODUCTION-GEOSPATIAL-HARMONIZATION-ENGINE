@@ -133,9 +133,33 @@ celery_app.conf.update(
     retry_backoff=True,
     retry_jitter=True,
 )
-def process_cadastral_layer_task(self: CadastreTask, layer_id: str) -> Dict[str, Any]:
-    """Asynchronous pipeline task: Ingest and validate cadastral survey layer."""
+def process_cadastral_layer_task(
+    self: CadastreTask,
+    layer_id: str,
+    file_path: Optional[str] = None,
+    target_crs: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Asynchronous pipeline task: Ingest, auto-detect, and validate cadastral survey layer."""
     self.update_progress(10, "VALIDATING_FORMAT")
+
+    if file_path:
+        from backend.ingestion.pipeline import UnifiedIngestionDispatcher
+
+        self.update_progress(30, "INGESTING_FEATURES")
+        result = UnifiedIngestionDispatcher.ingest_file(file_path, target_crs=target_crs)
+        self.update_progress(100, "COMPLETED")
+        return {
+            "task_id": self.request.id,
+            "layer_id": layer_id,
+            "format": result.format.value,
+            "detected_crs": result.detected_crs,
+            "feature_count": result.feature_count,
+            "bounds": list(result.bounds) if result.bounds else None,
+            "is_raster": result.is_raster,
+            "status": "COMPLETED",
+            "action": "ingest_and_validate",
+        }
+
     return {
         "task_id": self.request.id,
         "layer_id": layer_id,

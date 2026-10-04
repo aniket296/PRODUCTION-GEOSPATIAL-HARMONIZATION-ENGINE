@@ -50,6 +50,8 @@ class SupportedFormat(str, enum.Enum):
     KML = "KML"
     KMZ = "KMZ"
     DXF = "DXF"
+    FLATGEOBUF = "FLATGEOBUF"
+    GEOTIFF = "GEOTIFF"
 
 
 class RawCadastralLayer(Base):

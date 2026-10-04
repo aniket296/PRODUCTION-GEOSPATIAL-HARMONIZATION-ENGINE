@@ -69,6 +69,16 @@ from backend.ingestion.geotiff_reader import (
     read_tiff_pages,
     read_tiff_pages_from_file,
 )
+from backend.ingestion.pipeline import (
+    CorruptDataError,
+    IngestionPipelineError,
+    UnifiedFeatureRecord,
+    UnifiedIngestionDispatcher,
+    UnifiedIngestionResult,
+    UnsupportedFormatError,
+    detect_format_from_bytes,
+    detect_format_from_file,
+)
 from backend.ingestion.shapefile_reader import (
     ShapefileComponentSet,
     ShapefileCorruptArchiveError,
@@ -158,4 +168,12 @@ __all__ = [
     "raster_footprint",
     "read_tiff_pages",
     "read_tiff_pages_from_file",
+    "CorruptDataError",
+    "IngestionPipelineError",
+    "UnifiedFeatureRecord",
+    "UnifiedIngestionDispatcher",
+    "UnifiedIngestionResult",
+    "UnsupportedFormatError",
+    "detect_format_from_bytes",
+    "detect_format_from_file",
 ]
