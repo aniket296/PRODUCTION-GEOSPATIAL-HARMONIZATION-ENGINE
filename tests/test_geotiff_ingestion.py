@@ -21,15 +21,24 @@ from backend.ingestion.geotiff_reader import (
     TIFF_TYPE_SHORT,
     GeoTIFFCorruptIFDError,
     GeoTIFFGeoreferenceError,
+    GeoTIFFIngestionReader,
+    GeoTIFFIngestionResult,
     GeoTIFFInvalidHeaderError,
+    GeoTIFFMissingGeoreferenceError,
     ModelTiepoint,
+    RasterMetadata,
     SyntheticGeoTIFFPage,
     build_synthetic_geotiff,
+    compute_geotransform,
+    fit_affine_from_tiepoints,
+    model_to_pixel,
     parse_geokey_directory,
     parse_model_pixel_scale,
     parse_model_tiepoints,
     parse_model_transformation,
     parse_tiff_header,
+    pixel_to_model,
+    raster_footprint,
     read_tiff_pages,
     read_tiff_pages_from_file,
 )
@@ -292,3 +301,206 @@ def test_read_tiff_pages_from_file(tmp_path: Path):
 def test_synthetic_builder_is_deterministic():
     spec = [SyntheticGeoTIFFPage(citation="Everest 1830"), SyntheticGeoTIFFPage(new_subfile_type=1)]
     assert build_synthetic_geotiff(spec) == build_synthetic_geotiff(spec)
+
+
+# --- GeoTIFFIngestionReader & Spatial Extent ---------------------------------
+
+
+def test_geotiff_ingestion_reader_tiepoint_and_scale(tmp_path: Path):
+    """Verify end-to-end reader extracts correct dimensions, bounds, footprint, and metadata."""
+    spec = SyntheticGeoTIFFPage(
+        width=100,
+        height=80,
+        tiepoints=[(0.0, 0.0, 0.0, 3600000.0, 500000.0, 0.0)],
+        pixel_scale=(0.5, 0.5, 0.0),
+        epsg=24378,
+        description="Rohtak cadastre map",
+        nodata="-9999",
+    )
+    payload = build_synthetic_geotiff([spec])
+    tif_file = tmp_path / "rohtak_sheet.tif"
+    tif_file.write_bytes(payload)
+
+    # 1. Read from file
+    res = GeoTIFFIngestionReader.read_from_file(tif_file)
+    assert isinstance(res, GeoTIFFIngestionResult)
+    assert res.is_valid is True
+    meta = res.metadata
+    assert meta.width == 100
+    assert meta.height == 80
+    assert meta.band_count == 1
+    assert meta.data_type == "uint8"
+    assert meta.compression == "none"
+    assert meta.nodata == -9999.0
+    assert meta.crs == "EPSG:24378"
+    assert meta.pixel_size == (0.5, 0.5)
+    assert meta.is_rotated is False
+
+    # Bounds: X from 3600000.0 to 3600000 + 100*0.5 = 3600050.0
+    # Y from 500000 - 80*0.5 = 499960.0 to 500000.0
+    assert meta.bounds == (3600000.0, 499960.0, 3600050.0, 500000.0)
+    assert meta.footprint is not None
+    assert meta.footprint.is_valid is True
+    assert meta.footprint.exterior.is_ccw is True
+    assert meta.footprint_area == pytest.approx(50.0 * 40.0)
+
+    # 2. Read from bytes matches
+    res_bytes = GeoTIFFIngestionReader.read_from_bytes(payload)
+    assert res_bytes.metadata.bounds == meta.bounds
+    assert res_bytes.detected_crs == "EPSG:24378"
+
+
+def test_geotiff_ingestion_reader_transformation_matrix(tmp_path: Path):
+    """Verify reader supports 4x4 row-major affine transformation matrices with rotation."""
+    # Affine matrix: 30-degree rotation, scale 1.0, translation (700000, 3100000)
+    # X = 700000 + 0.866025*col - 0.5*row
+    # Y = 3100000 + 0.5*col + 0.866025*row
+    matrix = (
+        0.8660254037844386, -0.5, 0.0, 700000.0,
+        0.5, 0.8660254037844386, 0.0, 3100000.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+    spec = SyntheticGeoTIFFPage(
+        width=50,
+        height=50,
+        tiepoints=None,
+        pixel_scale=None,
+        transformation=matrix,
+        epsg=32643,
+    )
+    payload = build_synthetic_geotiff([spec])
+    res = GeoTIFFIngestionReader.read_from_bytes(payload)
+
+    assert res.is_valid is True
+    assert res.metadata.is_rotated is True
+    gt = res.metadata.geotransform
+    assert gt is not None
+
+    # Test coordinate inversion roundtrip
+    test_cols_rows = [(0.0, 0.0), (50.0, 0.0), (50.0, 50.0), (25.5, 12.3)]
+    for col, row in test_cols_rows:
+        x, y = pixel_to_model(gt, col, row)
+        col_inv, row_inv = model_to_pixel(gt, x, y)
+        assert col_inv == pytest.approx(col, abs=1e-6)
+        assert row_inv == pytest.approx(row, abs=1e-6)
+
+
+def test_geotiff_ingestion_reader_gcp_least_squares_fit():
+    """Verify reader fits affine geotransform from >= 3 GCPs with residual calculation."""
+    gcps = [
+        (0.0, 0.0, 0.0, 100.0, 200.0, 0.0),
+        (10.0, 0.0, 0.0, 120.0, 200.0, 0.0),
+        (10.0, 10.0, 0.0, 120.0, 180.0, 0.0),
+        (0.0, 10.0, 0.0, 100.0, 180.0, 0.0),
+    ]
+    spec = SyntheticGeoTIFFPage(
+        width=10,
+        height=10,
+        tiepoints=gcps,
+        pixel_scale=None,
+        epsg=24378,
+    )
+    payload = build_synthetic_geotiff([spec])
+    res = GeoTIFFIngestionReader.read_from_bytes(payload)
+
+    assert res.is_valid is True
+    assert res.metadata.gcp_fit is not None
+    assert res.metadata.gcp_fit.gcp_count == 4
+    assert res.metadata.gcp_fit.rms_error == pytest.approx(0.0, abs=1e-6)
+    assert any("GCPs" in w for w in res.warnings)
+
+
+def test_geotiff_pixel_is_point_shift():
+    """Verify PixelIsPoint rasters apply half-pixel shift to geotransform origin."""
+    spec_area = SyntheticGeoTIFFPage(
+        width=10, height=10,
+        tiepoints=[(0.0, 0.0, 0.0, 100.0, 100.0, 0.0)],
+        pixel_scale=(2.0, 2.0, 0.0),
+        raster_type=1,  # PixelIsArea
+    )
+    spec_point = SyntheticGeoTIFFPage(
+        width=10, height=10,
+        tiepoints=[(0.0, 0.0, 0.0, 100.0, 100.0, 0.0)],
+        pixel_scale=(2.0, 2.0, 0.0),
+        raster_type=2,  # PixelIsPoint
+    )
+
+    res_area = GeoTIFFIngestionReader.read_from_bytes(build_synthetic_geotiff([spec_area]))
+    res_point = GeoTIFFIngestionReader.read_from_bytes(build_synthetic_geotiff([spec_point]))
+
+    gt_area = res_area.metadata.geotransform
+    gt_point = res_point.metadata.geotransform
+
+    # In PixelIsPoint, origin is shifted by half pixel (-0.5*scale_x, +0.5*scale_y)
+    assert gt_point[0] == pytest.approx(gt_area[0] - 1.0)
+    assert gt_point[3] == pytest.approx(gt_area[3] + 1.0)
+
+
+def test_geotiff_missing_georeference():
+    """Verify behavior when raster lacks georeferencing tags."""
+    spec = SyntheticGeoTIFFPage(tiepoints=None, pixel_scale=None, epsg=None)
+    payload = build_synthetic_geotiff([spec])
+
+    with pytest.raises(GeoTIFFMissingGeoreferenceError):
+        GeoTIFFIngestionReader.read_from_bytes(payload, require_georeference=True)
+
+    res = GeoTIFFIngestionReader.read_from_bytes(payload, require_georeference=False)
+    assert res.metadata.geotransform is None
+    assert res.metadata.bounds is None
+    assert res.is_valid is False
+    assert any("not georeferenced" in w for w in res.warnings)
+
+
+def test_geotiff_collinear_gcps_raises_error():
+    """Verify collinear GCPs produce an error during least-squares fit."""
+    collinear = [
+        ModelTiepoint(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        ModelTiepoint(1.0, 1.0, 0.0, 10.0, 10.0, 0.0),
+        ModelTiepoint(2.0, 2.0, 0.0, 20.0, 20.0, 0.0),
+    ]
+    with pytest.raises(GeoTIFFGeoreferenceError, match="collinear"):
+        fit_affine_from_tiepoints(collinear)
+
+
+def test_geotiff_singular_geotransform_raises_error():
+    """Verify singular geotransform determinant raises error on model_to_pixel inversion."""
+    singular_gt = (100.0, 1.0, 2.0, 200.0, 2.0, 4.0)  # det = 1*4 - 2*2 = 0
+    with pytest.raises(GeoTIFFGeoreferenceError, match="singular"):
+        model_to_pixel(singular_gt, 150.0, 250.0)
+
+
+def test_geotiff_geographic_out_of_bounds_validation():
+    """Verify rasters with out-of-range geographic coordinates fail validation."""
+    spec = SyntheticGeoTIFFPage(
+        width=10,
+        height=10,
+        tiepoints=[(0.0, 0.0, 0.0, 250.0, 45.0, 0.0)],  # Lon 250 > 180
+        pixel_scale=(1.0, 1.0, 0.0),
+        epsg=4326,
+        model_type=MODEL_TYPE_GEOGRAPHIC,
+    )
+    res = GeoTIFFIngestionReader.read_from_bytes(build_synthetic_geotiff([spec]))
+    assert res.is_valid is False
+    assert any("limits" in w for w in res.warnings)
+
+
+def test_geotiff_overviews_and_metadata_dict():
+    """Verify overviews extraction and to_dict serialization."""
+    spec_main = SyntheticGeoTIFFPage(width=16, height=16, description="Aerial image")
+    spec_ovr1 = SyntheticGeoTIFFPage(width=8, height=8, new_subfile_type=1)
+    spec_ovr2 = SyntheticGeoTIFFPage(width=4, height=4, new_subfile_type=1)
+
+    res = GeoTIFFIngestionReader.read_from_bytes(build_synthetic_geotiff([spec_main, spec_ovr1, spec_ovr2]))
+    meta = res.metadata
+    assert meta.overview_count == 2
+    assert meta.overview_sizes == [(8, 8), (4, 4)]
+    assert meta.page_count == 3
+
+    d = meta.to_dict()
+    assert d["width"] == 16
+    assert d["height"] == 16
+    assert d["overview_count"] == 2
+    assert d["crs"] == "EPSG:24378"
+    assert "footprint_wkt" in d
+

@@ -14,9 +14,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from fractions import Fraction
+from functools import lru_cache
+import math
+import mmap
 from pathlib import Path
 import struct
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+
+import numpy as np
+from pyproj import CRS
+from pyproj.exceptions import CRSError
+from shapely.geometry import Polygon
+from shapely.geometry.polygon import orient
 
 # ---------------------------------------------------------------------------
 # TIFF / GeoTIFF constants
@@ -85,6 +94,7 @@ TAG_MODEL_TRANSFORMATION = 34264
 TAG_GEO_KEY_DIRECTORY = 34735
 TAG_GEO_DOUBLE_PARAMS = 34736
 TAG_GEO_ASCII_PARAMS = 34737
+TAG_GDAL_NODATA = 42113
 
 # GeoKeys
 GEOKEY_GT_MODEL_TYPE = 1024
@@ -140,6 +150,10 @@ class GeoTIFFCorruptIFDError(GeoTIFFExtractionError):
 
 class GeoTIFFGeoreferenceError(GeoTIFFExtractionError):
     """Raised when GeoTIFF georeferencing tags are malformed."""
+
+
+class GeoTIFFMissingGeoreferenceError(GeoTIFFGeoreferenceError):
+    """Raised when a raster lacks the tags required to compute its spatial extent."""
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +579,8 @@ class SyntheticGeoTIFFPage:
     compression: int = 1
     new_subfile_type: int = 0
     description: Optional[str] = None
+    sample_format: int = 1
+    nodata: Optional[str] = None
 
 
 def _encode_values(field_type: int, values: Any, byte_order: str) -> Tuple[int, bytes]:
@@ -599,10 +615,12 @@ def _page_entries(page: SyntheticGeoTIFFPage, strip_offset: int, strip_size: int
         (TAG_X_RESOLUTION, TIFF_TYPE_RATIONAL, [72]),
         (TAG_Y_RESOLUTION, TIFF_TYPE_RATIONAL, [72]),
         (TAG_RESOLUTION_UNIT, TIFF_TYPE_SHORT, [2]),
-        (TAG_SAMPLE_FORMAT, TIFF_TYPE_SHORT, [1] * page.samples_per_pixel),
+        (TAG_SAMPLE_FORMAT, TIFF_TYPE_SHORT, [page.sample_format] * page.samples_per_pixel),
     ]
     if page.description:
         entries.append((TAG_IMAGE_DESCRIPTION, TIFF_TYPE_ASCII, page.description))
+    if page.nodata is not None:
+        entries.append((TAG_GDAL_NODATA, TIFF_TYPE_ASCII, page.nodata))
     if page.pixel_scale is not None:
         entries.append((TAG_MODEL_PIXEL_SCALE, TIFF_TYPE_DOUBLE, list(page.pixel_scale)))
     if page.tiepoints:
@@ -695,3 +713,359 @@ def build_synthetic_geotiff(
     else:
         out[0:8] = mark + struct.pack(bo + "HI", TIFF_VERSION_CLASSIC, header_size)
     return bytes(out)
+
+
+# ---------------------------------------------------------------------------
+# Geotransform, raster metadata and spatial extent
+# ---------------------------------------------------------------------------
+
+# GDAL-style affine geotransform: (x_origin, a, b, y_origin, d, e) where
+#   X = x_origin + a * col + b * row
+#   Y = y_origin + d * col + e * row
+GeoTransform = Tuple[float, float, float, float, float, float]
+
+COMPRESSION_NAMES: Dict[int, str] = {
+    1: "none",
+    2: "ccitt_rle",
+    3: "ccitt_fax3",
+    4: "ccitt_fax4",
+    5: "lzw",
+    6: "ojpeg",
+    7: "jpeg",
+    8: "deflate",
+    32773: "packbits",
+    32946: "deflate",
+    34887: "lerc",
+    34925: "lzma",
+    50000: "zstd",
+    50001: "webp",
+}
+
+SAMPLE_FORMAT_PREFIX: Dict[int, str] = {1: "uint", 2: "int", 3: "float", 4: "void"}
+
+GCP_MIN_COUNT = 3
+
+
+@dataclass(frozen=True)
+class GCPFit:
+    """Least-squares affine fit of ground control tiepoints."""
+
+    geotransform: GeoTransform
+    rms_error: float
+    max_residual: float
+    gcp_count: int
+
+
+def fit_affine_from_tiepoints(tiepoints: Sequence[ModelTiepoint]) -> GCPFit:
+    """Fit a 6-parameter affine geotransform to >= 3 raster/model tiepoints by least squares."""
+    if len(tiepoints) < GCP_MIN_COUNT:
+        raise GeoTIFFMissingGeoreferenceError(
+            f"Affine fit requires at least {GCP_MIN_COUNT} tiepoints, found {len(tiepoints)}"
+        )
+    design = np.array([[1.0, tp.i, tp.j] for tp in tiepoints], dtype=np.float64)
+    if np.linalg.matrix_rank(design) < 3:
+        raise GeoTIFFGeoreferenceError("Tiepoints are collinear; affine geotransform is undetermined")
+    xs = np.array([tp.x for tp in tiepoints], dtype=np.float64)
+    ys = np.array([tp.y for tp in tiepoints], dtype=np.float64)
+    cx, *_ = np.linalg.lstsq(design, xs, rcond=None)
+    cy, *_ = np.linalg.lstsq(design, ys, rcond=None)
+    residuals = np.hypot(design @ cx - xs, design @ cy - ys)
+    gt: GeoTransform = (float(cx[0]), float(cx[1]), float(cx[2]), float(cy[0]), float(cy[1]), float(cy[2]))
+    return GCPFit(
+        geotransform=gt,
+        rms_error=float(np.sqrt(np.mean(residuals**2))),
+        max_residual=float(residuals.max()),
+        gcp_count=len(tiepoints),
+    )
+
+
+def compute_geotransform(page: TiffPage, pixel_is_point: Optional[bool] = None) -> Tuple[GeoTransform, Optional[GCPFit]]:
+    """Derive the PixelIsArea affine geotransform for a page.
+
+    Priority: ModelTransformationTag, then tiepoint + ModelPixelScaleTag, then a least-squares
+    fit over >= 3 tiepoints. PixelIsPoint rasters are shifted by half a pixel so the origin
+    refers to the outer corner of the top-left pixel (GDAL convention).
+    """
+    fit: Optional[GCPFit] = None
+    matrix = page.model_transformation
+    tiepoints = page.model_tiepoints
+    scale = page.model_pixel_scale
+
+    if matrix is not None:
+        gt: GeoTransform = (matrix[3], matrix[0], matrix[1], matrix[7], matrix[4], matrix[5])
+    elif tiepoints and scale is not None:
+        tp = tiepoints[0]
+        sx, sy, _ = scale
+        gt = (tp.x - tp.i * sx, sx, 0.0, tp.y + tp.j * sy, 0.0, -sy)
+    elif len(tiepoints) >= GCP_MIN_COUNT:
+        fit = fit_affine_from_tiepoints(tiepoints)
+        gt = fit.geotransform
+    else:
+        raise GeoTIFFMissingGeoreferenceError(
+            "Raster has no ModelTransformationTag, no tiepoint + ModelPixelScaleTag pair, "
+            f"and only {len(tiepoints)} tiepoint(s) for a GCP fit"
+        )
+
+    if pixel_is_point is None:
+        gk = page.geokey_directory
+        pixel_is_point = bool(gk and gk.is_pixel_is_point)
+    if pixel_is_point:
+        x0, a, b, y0, d, e = gt
+        gt = (x0 - 0.5 * a - 0.5 * b, a, b, y0 - 0.5 * d - 0.5 * e, d, e)
+    return gt, fit
+
+
+def pixel_to_model(gt: GeoTransform, col: float, row: float) -> Tuple[float, float]:
+    """Map raster (col, row) to model (X, Y) coordinates."""
+    x0, a, b, y0, d, e = gt
+    return x0 + a * col + b * row, y0 + d * col + e * row
+
+
+def model_to_pixel(gt: GeoTransform, x: float, y: float) -> Tuple[float, float]:
+    """Inverse of :func:`pixel_to_model`."""
+    x0, a, b, y0, d, e = gt
+    det = a * e - b * d
+    if det == 0.0:
+        raise GeoTIFFGeoreferenceError("Geotransform is singular and cannot be inverted")
+    dx, dy = x - x0, y - y0
+    return (e * dx - b * dy) / det, (-d * dx + a * dy) / det
+
+
+def raster_footprint(gt: GeoTransform, width: int, height: int) -> Polygon:
+    """Counter-clockwise (RFC 7946) polygon covering the full raster outer edge."""
+    corners = [pixel_to_model(gt, c, r) for c, r in ((0, 0), (width, 0), (width, height), (0, height))]
+    return orient(Polygon(corners), sign=1.0)
+
+
+@dataclass
+class RasterMetadata:
+    """Raster metadata and spatial extent of the full-resolution image."""
+
+    width: int
+    height: int
+    band_count: int
+    bits_per_sample: Tuple[int, ...]
+    data_type: str
+    compression: str
+    photometric: Optional[int]
+    page_count: int
+    overview_count: int
+    overview_sizes: List[Tuple[int, int]]
+    nodata: Optional[float]
+    description: Optional[str]
+    crs: Optional[str]
+    citation: Optional[str]
+    raster_type: int
+    geotransform: Optional[GeoTransform]
+    pixel_size: Optional[Tuple[float, float]]
+    is_rotated: bool
+    bounds: Optional[Tuple[float, float, float, float]]
+    footprint: Optional[Polygon]
+    gcp_fit: Optional[GCPFit] = None
+
+    @property
+    def is_georeferenced(self) -> bool:
+        return self.geotransform is not None
+
+    @property
+    def footprint_area(self) -> float:
+        return float(self.footprint.area) if self.footprint is not None else 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "width": self.width,
+            "height": self.height,
+            "band_count": self.band_count,
+            "data_type": self.data_type,
+            "compression": self.compression,
+            "page_count": self.page_count,
+            "overview_count": self.overview_count,
+            "overview_sizes": [list(s) for s in self.overview_sizes],
+            "nodata": self.nodata,
+            "crs": self.crs,
+            "geotransform": list(self.geotransform) if self.geotransform else None,
+            "pixel_size": list(self.pixel_size) if self.pixel_size else None,
+            "is_rotated": self.is_rotated,
+            "bounds": list(self.bounds) if self.bounds else None,
+            "footprint_wkt": self.footprint.wkt if self.footprint is not None else None,
+            "gcp_rms_error": self.gcp_fit.rms_error if self.gcp_fit else None,
+        }
+
+
+@dataclass
+class GeoTIFFIngestionResult:
+    """Output of GeoTIFF ingestion."""
+
+    metadata: RasterMetadata
+    pages: List[TiffPage]
+    detected_crs: Optional[str]
+    is_valid: bool
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def bounds(self) -> Optional[Tuple[float, float, float, float]]:
+        return self.metadata.bounds
+
+    @property
+    def footprint(self) -> Optional[Polygon]:
+        return self.metadata.footprint
+
+
+def _data_type(page: TiffPage) -> str:
+    fmt = page.get(TAG_SAMPLE_FORMAT)
+    sample_format = int(fmt[0]) if fmt else 1
+    bits = page.bits_per_sample[0]
+    return f"{SAMPLE_FORMAT_PREFIX.get(sample_format, 'unknown')}{bits}"
+
+
+def _parse_nodata(page: TiffPage) -> Optional[float]:
+    raw = page.get(TAG_GDAL_NODATA)
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return float(str(raw).strip())
+    except ValueError:
+        return None
+
+
+class GeoTIFFIngestionReader:
+    """Reader extracting raster metadata and spatial extent from (Big)GeoTIFF payloads."""
+
+    @classmethod
+    def extract_metadata(
+        cls,
+        pages: List[TiffPage],
+        target_crs: Optional[str] = None,
+        require_georeference: bool = True,
+    ) -> Tuple[RasterMetadata, List[str]]:
+        """Build :class:`RasterMetadata` from parsed pages, returning it with any warnings."""
+        if not pages:
+            raise GeoTIFFCorruptIFDError("TIFF contains no pages")
+        warnings: List[str] = []
+
+        full_res = [p for p in pages if not p.is_reduced_resolution and not (p.new_subfile_type & 0x4)]
+        main = full_res[0] if full_res else pages[0]
+        overviews = sorted(
+            (p for p in pages if p.is_reduced_resolution and not (p.new_subfile_type & 0x4)),
+            key=lambda p: p.width * p.height,
+            reverse=True,
+        )
+        if main.width <= 0 or main.height <= 0:
+            raise GeoTIFFCorruptIFDError(f"Invalid raster dimensions {main.width}x{main.height}")
+
+        gk = main.geokey_directory
+        file_crs = gk.canonical_crs if gk else None
+        crs = file_crs or target_crs
+        if file_crs and target_crs and file_crs != target_crs:
+            warnings.append(f"Embedded CRS {file_crs} differs from requested {target_crs}; using embedded CRS")
+        if crs is None:
+            warnings.append("Raster has no EPSG-resolvable CRS in GeoKeyDirectoryTag")
+
+        compression = COMPRESSION_NAMES.get(main.compression, f"unknown({main.compression})")
+        geotransform: Optional[GeoTransform] = None
+        fit: Optional[GCPFit] = None
+        try:
+            geotransform, fit = compute_geotransform(main)
+        except GeoTIFFMissingGeoreferenceError:
+            if require_georeference:
+                raise
+            warnings.append("Raster is not georeferenced; spatial extent unavailable")
+
+        bounds = footprint = pixel_size = None
+        is_rotated = False
+        if geotransform is not None:
+            _, a, b, _, d, e = geotransform
+            is_rotated = not (math.isclose(b, 0.0, abs_tol=1e-12) and math.isclose(d, 0.0, abs_tol=1e-12))
+            pixel_size = (math.hypot(a, d), math.hypot(b, e))
+            footprint = raster_footprint(geotransform, main.width, main.height)
+            bounds = tuple(float(v) for v in footprint.bounds)  # type: ignore[assignment]
+            if fit is not None:
+                warnings.append(f"Geotransform fitted from {fit.gcp_count} GCPs (RMS {fit.rms_error:.6f})")
+
+        metadata = RasterMetadata(
+            width=main.width,
+            height=main.height,
+            band_count=main.samples_per_pixel,
+            bits_per_sample=main.bits_per_sample,
+            data_type=_data_type(main),
+            compression=compression,
+            photometric=main.photometric,
+            page_count=len(pages),
+            overview_count=len(overviews),
+            overview_sizes=[(p.width, p.height) for p in overviews],
+            nodata=_parse_nodata(main),
+            description=main.description,
+            crs=crs,
+            citation=gk.citation if gk else None,
+            raster_type=gk.raster_type if gk else RASTER_PIXEL_IS_AREA,
+            geotransform=geotransform,
+            pixel_size=pixel_size,
+            is_rotated=is_rotated,
+            bounds=bounds,  # type: ignore[arg-type]
+            footprint=footprint,
+            gcp_fit=fit,
+        )
+        return metadata, warnings
+
+    @classmethod
+    def _validate(cls, metadata: RasterMetadata, warnings: List[str]) -> bool:
+        if metadata.footprint is None:
+            return False
+        if not metadata.footprint.is_valid or metadata.footprint.area <= 0.0:
+            warnings.append("Raster footprint is degenerate or invalid")
+            return False
+        is_geographic = is_geographic_crs(metadata.crs)
+        if is_geographic and metadata.bounds is not None:
+            minx, miny, maxx, maxy = metadata.bounds
+            if minx < -180.0 or maxx > 180.0 or miny < -90.0 or maxy > 90.0:
+                warnings.append(f"Geographic extent {metadata.bounds} exceeds WGS84 coordinate limits")
+                return False
+        return True
+
+    @classmethod
+    def read_from_bytes(
+        cls,
+        data: Union[bytes, bytearray, memoryview, mmap.mmap],
+        target_crs: Optional[str] = None,
+        require_georeference: bool = True,
+    ) -> GeoTIFFIngestionResult:
+        """Parse a GeoTIFF payload and return raster metadata with spatial extent."""
+        pages = read_tiff_pages(data)
+        metadata, warnings = cls.extract_metadata(pages, target_crs=target_crs, require_georeference=require_georeference)
+        if metadata.compression != "none":
+            warnings.append(f"Pixel data is {metadata.compression}-compressed; metadata extracted without decoding")
+        is_valid = cls._validate(metadata, warnings)
+        return GeoTIFFIngestionResult(
+            metadata=metadata,
+            pages=pages,
+            detected_crs=metadata.crs,
+            is_valid=is_valid,
+            warnings=warnings,
+        )
+
+    @classmethod
+    def read_from_file(
+        cls,
+        file_path: Union[str, Path],
+        target_crs: Optional[str] = None,
+        require_georeference: bool = True,
+    ) -> GeoTIFFIngestionResult:
+        """Read a GeoTIFF from disk via a read-only memory map (pixel data is never loaded)."""
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"GeoTIFF file not found: {path}")
+        if path.stat().st_size < 8:
+            raise GeoTIFFInvalidHeaderError(f"GeoTIFF file too small: {path.stat().st_size} bytes")
+        with open(path, "rb") as fh, mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+            return cls.read_from_bytes(mapped, target_crs=target_crs, require_georeference=require_georeference)
+
+
+@lru_cache(maxsize=256)
+def is_geographic_crs(crs: Optional[str]) -> bool:
+    """Whether a CRS string denotes a geographic (lat/lon) system, resolved via pyproj's bundled proj.db."""
+    if not crs:
+        return False
+    try:
+        return bool(CRS.from_user_input(crs).is_geographic)
+    except CRSError:
+        return False
