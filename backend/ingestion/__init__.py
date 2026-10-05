@@ -81,6 +81,17 @@ from backend.ingestion.pipeline import (
     detect_format_from_bytes,
     detect_format_from_file,
 )
+from backend.ingestion.validation import (
+    CorruptArchiveError,
+    MalformedHeaderError,
+    PathTraversalError,
+    PayloadSizeExceededError,
+    UnsupportedPayloadError,
+    UploadValidationError,
+    UploadValidationReport,
+    UploadValidator,
+    ZipBombError,
+)
 from backend.ingestion.shapefile_reader import (
     ShapefileComponentSet,
     ShapefileCorruptArchiveError,
@@ -180,4 +191,13 @@ __all__ = [
     "UnsupportedFormatError",
     "detect_format_from_bytes",
     "detect_format_from_file",
+    "CorruptArchiveError",
+    "MalformedHeaderError",
+    "PathTraversalError",
+    "PayloadSizeExceededError",
+    "UnsupportedPayloadError",
+    "UploadValidationError",
+    "UploadValidationReport",
+    "UploadValidator",
+    "ZipBombError",
 ]
