@@ -71,6 +71,8 @@ from backend.ingestion.geotiff_reader import (
 )
 from backend.ingestion.pipeline import (
     CorruptDataError,
+    FormatDetectionResult,
+    GeospatialFormatDetector,
     IngestionPipelineError,
     UnifiedFeatureRecord,
     UnifiedIngestionDispatcher,
@@ -169,6 +171,8 @@ __all__ = [
     "read_tiff_pages",
     "read_tiff_pages_from_file",
     "CorruptDataError",
+    "FormatDetectionResult",
+    "GeospatialFormatDetector",
     "IngestionPipelineError",
     "UnifiedFeatureRecord",
     "UnifiedIngestionDispatcher",

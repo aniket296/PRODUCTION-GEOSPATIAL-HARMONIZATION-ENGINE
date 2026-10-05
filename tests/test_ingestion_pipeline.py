@@ -23,6 +23,8 @@ from backend.ingestion.geotiff_reader import (
 )
 from backend.ingestion.pipeline import (
     CorruptDataError,
+    FormatDetectionResult,
+    GeospatialFormatDetector,
     IngestionPipelineError,
     UnifiedFeatureRecord,
     UnifiedIngestionDispatcher,
@@ -523,3 +525,166 @@ def test_celery_task_process_cadastral_layer_backward_compatibility():
         celery_app.conf.result_backend = original_backend
         celery_app.conf.task_always_eager = False
         celery_app.conf.task_eager_propagates = False
+
+
+# ---------------------------------------------------------------------------
+# Detailed GeospatialFormatDetector and Ingestion Features Tests
+# ---------------------------------------------------------------------------
+
+
+def test_geospatial_format_detector_detailed_result():
+    """Verify GeospatialFormatDetector returns complete FormatDetectionResult with confidence and MIME."""
+    # FlatGeobuf magic bytes
+    fgb_data = _build_sample_flatgeobuf_bytes()
+    det_fgb = GeospatialFormatDetector.detect_bytes(fgb_data)
+    assert isinstance(det_fgb, FormatDetectionResult)
+    assert det_fgb.format == SupportedFormat.FLATGEOBUF
+    assert det_fgb.confidence == 1.0
+    assert det_fgb.mime_type == "application/vnd.flatgeobuf"
+    assert det_fgb.detection_method == "MAGIC_BYTES"
+    assert "magic" in det_fgb.details
+
+    # GeoTIFF magic bytes
+    gt_data = _build_sample_geotiff_bytes()
+    det_gt = GeospatialFormatDetector.detect_bytes(gt_data)
+    assert det_gt.format == SupportedFormat.GEOTIFF
+    assert det_gt.confidence == 1.0
+    assert det_gt.mime_type == "image/tiff"
+    assert det_gt.detection_method == "MAGIC_BYTES"
+
+    # Shapefile ZIP archive inspection
+    shp_zip = _build_sample_shapefile_zip_bytes()
+    det_shp = GeospatialFormatDetector.detect_bytes(shp_zip)
+    assert det_shp.format == SupportedFormat.SHAPEFILE
+    assert det_shp.confidence >= 0.95
+    assert det_shp.mime_type == "application/zip"
+    assert det_shp.detection_method == "ARCHIVE_INSPECTION"
+
+    # GeoJSON text structure
+    gj_data = _build_sample_geojson_bytes()
+    det_gj = GeospatialFormatDetector.detect_bytes(gj_data)
+    assert det_gj.format == SupportedFormat.GEOJSON
+    assert det_gj.confidence >= 0.95
+    assert det_gj.mime_type == "application/geo+json"
+    assert det_gj.detection_method == "TEXT_STRUCTURE"
+
+    # DXF ASCII text structure
+    dxf_data = _build_sample_dxf_bytes()
+    det_dxf = GeospatialFormatDetector.detect_bytes(dxf_data)
+    assert det_dxf.format == SupportedFormat.DXF
+    assert det_dxf.confidence >= 0.95
+    assert det_dxf.mime_type == "image/vnd.dxf"
+    assert det_dxf.detection_method == "TEXT_STRUCTURE"
+
+
+def test_geospatial_format_detector_detect_file(tmp_path: Path):
+    """Verify detect_file works for both files and directory-based shapefiles."""
+    fgb_file = tmp_path / "test.fgb"
+    fgb_file.write_bytes(_build_sample_flatgeobuf_bytes())
+    res = GeospatialFormatDetector.detect_file(fgb_file)
+    assert res.format == SupportedFormat.FLATGEOBUF
+    assert res.confidence == 1.0
+
+    # Directory with shapefile
+    shp_dir = tmp_path / "cadastral_dir"
+    shp_dir.mkdir()
+    (shp_dir / "parcels.shp").write_bytes(struct.pack(">I", 9994) + b"\x00" * 96)
+    (shp_dir / "parcels.shx").write_bytes(b"\x00" * 100)
+    (shp_dir / "parcels.dbf").write_bytes(b"\x00" * 100)
+
+    res_dir = GeospatialFormatDetector.detect_file(shp_dir)
+    assert res_dir.format == SupportedFormat.SHAPEFILE
+    assert res_dir.detection_method == "DIRECTORY_INSPECTION"
+
+
+def test_unified_feature_record_to_dict_and_to_geojson():
+    """Verify UnifiedFeatureRecord exports to standard dictionary and GeoJSON feature."""
+    poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)])
+    rec = UnifiedFeatureRecord(
+        id="REC-001",
+        geometry=poly,
+        properties={"khasra_no": "42", "area_sqm": 100.0},
+        crs="EPSG:4326",
+        is_valid=True,
+        bounds=(0.0, 0.0, 10.0, 10.0),
+        area=100.0,
+    )
+
+    d = rec.to_dict()
+    assert d["id"] == "REC-001"
+    assert d["crs"] == "EPSG:4326"
+    assert d["is_valid"] is True
+    assert d["area"] == 100.0
+    assert d["geometry_type"] == "Polygon"
+
+    gj = rec.to_geojson_feature()
+    assert gj["type"] == "Feature"
+    assert gj["id"] == "REC-001"
+    assert gj["geometry"]["type"] == "Polygon"
+    assert gj["properties"]["khasra_no"] == "42"
+
+
+def test_unified_ingestion_result_to_dict_and_to_geojson_collection():
+    """Verify UnifiedIngestionResult exports summary dict and GeoJSON FeatureCollection."""
+    data = _build_sample_geojson_bytes()
+    result = UnifiedIngestionDispatcher.ingest_bytes(data)
+
+    d = result.to_dict()
+    assert d["format"] == "GEOJSON"
+    assert d["detected_crs"] == "EPSG:4326"
+    assert d["feature_count"] == 2
+    assert d["is_raster"] is False
+    assert "geometry_types" in d["metadata"]
+
+    gj_fc = result.to_geojson_feature_collection()
+    assert gj_fc["type"] == "FeatureCollection"
+    assert len(gj_fc["features"]) == 2
+    assert "crs" in gj_fc
+    assert gj_fc["features"][0]["properties"]["khasra_no"] == "101/1"
+
+
+def test_dispatcher_detect_convenience_methods(tmp_path: Path):
+    """Verify UnifiedIngestionDispatcher convenience detection methods."""
+    data = _build_sample_geojson_bytes()
+    det = UnifiedIngestionDispatcher.detect(data)
+    assert det.format == SupportedFormat.GEOJSON
+
+    fpath = tmp_path / "cadastre.geojson"
+    fpath.write_bytes(data)
+    det_file = UnifiedIngestionDispatcher.detect_file(fpath)
+    assert det_file.format == SupportedFormat.GEOJSON
+
+
+def test_dispatcher_options_max_features_and_skip_invalid():
+    """Verify max_features limit and skip_invalid filter options."""
+    data = _build_sample_geojson_bytes()  # Contains 2 features
+    res_limited = UnifiedIngestionDispatcher.ingest_bytes(data, max_features=1)
+    assert res_limited.feature_count == 1
+    assert len(res_limited.features) == 1
+
+    res_all = UnifiedIngestionDispatcher.ingest_bytes(data, skip_invalid=True)
+    assert res_all.feature_count == 2
+
+
+def test_dispatcher_geometry_types_and_total_area_metadata():
+    """Verify metadata calculates geometry type breakdown and total area."""
+    data = _build_sample_geojson_bytes()
+    result = UnifiedIngestionDispatcher.ingest_bytes(data)
+
+    assert "geometry_types" in result.metadata
+    assert result.metadata["geometry_types"].get("Polygon") == 2
+    assert "total_area_sqm" in result.metadata
+    assert result.metadata["total_area_sqm"] > 0
+    assert "detection_confidence" in result.metadata
+    assert result.metadata["detection_confidence"] >= 0.90
+
+
+def test_dispatcher_raster_cannot_export_geojson_feature_collection():
+    """Verify raster datasets raise ValueError when exporting as GeoJSON FeatureCollection."""
+    gt_data = _build_sample_geotiff_bytes()
+    result = UnifiedIngestionDispatcher.ingest_bytes(gt_data)
+
+    assert result.is_raster is True
+    with pytest.raises(ValueError, match="Raster datasets cannot be exported"):
+        result.to_geojson_feature_collection()
+
