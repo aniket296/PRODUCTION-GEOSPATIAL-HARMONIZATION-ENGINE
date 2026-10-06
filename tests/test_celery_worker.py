@@ -134,3 +134,125 @@ def test_task_retry_configuration():
     assert process_cadastral_layer_task.max_retries == 3
     assert process_cadastral_layer_task.retry_backoff is True
 
+
+def test_process_cadastral_layer_task_vector_with_normalization(tmp_path):
+    import json
+    from backend.worker.ingestion_state import IngestionState
+
+    geojson_file = tmp_path / "cadastral_sample.geojson"
+    geojson_data = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "id": "plot_101",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[77.10, 28.50], [77.12, 28.50], [77.12, 28.52], [77.10, 28.52], [77.10, 28.50]]
+                    ],
+                },
+                "properties": {"khasra_no": "101", "village": "Rampur"},
+            },
+            {
+                "type": "Feature",
+                "id": "plot_102",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[77.12, 28.50], [77.14, 28.50], [77.14, 28.52], [77.12, 28.52], [77.12, 28.50]]
+                    ],
+                },
+                "properties": {"khasra_no": "102", "village": "Rampur"},
+            },
+        ],
+    }
+    geojson_file.write_text(json.dumps(geojson_data), encoding="utf-8")
+
+    layer_id = str(uuid.uuid4())
+    res = process_cadastral_layer_task.apply(
+        args=[layer_id],
+        kwargs={"file_path": str(geojson_file), "normalize_geometries": True},
+    )
+
+    assert res.successful()
+    result = res.result
+    assert result["layer_id"] == layer_id
+    assert result["status"] == "COMPLETED"
+    assert result["feature_count"] == 2
+    assert result["normalized_count"] == 2
+    assert result["is_raster"] is False
+    assert result["tracker"]["state"] == IngestionState.COMPLETED.value
+    stages = [h["to"] for h in result["tracker"]["history"]]
+    assert IngestionState.VALIDATING_FORMAT.value in stages
+    assert IngestionState.INGESTING_FEATURES.value in stages
+    assert IngestionState.NORMALIZING_GEOMETRY.value in stages
+    assert stages[-1] == IngestionState.COMPLETED.value
+
+
+def test_process_cadastral_layer_task_vector_skip_normalization(tmp_path):
+    import json
+    from backend.worker.ingestion_state import IngestionState
+
+    geojson_file = tmp_path / "cadastral_raw.geojson"
+    geojson_data = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "id": "plot_201",
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [[77.20, 28.60], [77.21, 28.60], [77.21, 28.61], [77.20, 28.61], [77.20, 28.60]]
+                    ],
+                },
+                "properties": {"khasra_no": "201"},
+            }
+        ],
+    }
+    geojson_file.write_text(json.dumps(geojson_data), encoding="utf-8")
+
+    layer_id = str(uuid.uuid4())
+    res = process_cadastral_layer_task.apply(
+        args=[layer_id],
+        kwargs={"file_path": str(geojson_file), "normalize_geometries": False},
+    )
+
+    assert res.successful()
+    result = res.result
+    assert result["status"] == "COMPLETED"
+    stages = [h["to"] for h in result["tracker"]["history"]]
+    assert IngestionState.NORMALIZING_GEOMETRY.value not in stages
+    assert stages[-1] == IngestionState.COMPLETED.value
+
+
+def test_process_cadastral_layer_task_invalid_payload_fails(tmp_path):
+    corrupt_file = tmp_path / "corrupt.geojson"
+    corrupt_file.write_bytes(b"NOT_A_GEOJSON_OR_GEOSPATIAL_FILE")
+
+    layer_id = str(uuid.uuid4())
+    res = process_cadastral_layer_task.apply(
+        args=[layer_id],
+        kwargs={"file_path": str(corrupt_file)},
+    )
+    assert res.status == "FAILURE"
+    assert isinstance(res.result, ValueError)
+    assert "Upload validation failed" in str(res.result)
+
+
+def test_upload_validator_validate_file_helper(tmp_path):
+    from backend.ingestion.validation import UploadValidator
+
+    # 1. Non-existent file
+    missing = tmp_path / "missing.shp"
+    rep_missing = UploadValidator.validate_file(missing)
+    assert not rep_missing.is_valid
+    assert rep_missing.error_code == "FILE_NOT_FOUND"
+
+    # 2. Valid file
+    valid = tmp_path / "valid.geojson"
+    valid.write_text('{"type": "FeatureCollection", "features": []}', encoding="utf-8")
+    rep_valid = UploadValidator.validate_file(valid)
+    assert rep_valid.is_valid
+

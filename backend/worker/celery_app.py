@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+import uuid
 
 from celery import Celery, Task
 from kombu import Exchange, Queue
@@ -124,11 +126,54 @@ celery_app.conf.update(
 )
 
 
+def _update_layer_record_sync(
+    layer_id: str,
+    status: Any,
+    feature_count: Optional[int] = None,
+    detected_crs: Optional[str] = None,
+    bounds: Optional[List[float]] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """Best-effort database update of raw cadastral layer record."""
+    try:
+        import asyncio
+        from backend.db.session import async_session_factory
+        from backend.models.layer import RawCadastralLayer
+        from sqlalchemy import select
+
+        async def _update() -> None:
+            async with async_session_factory() as session:
+                parsed_id = uuid.UUID(str(layer_id))
+                stmt = select(RawCadastralLayer).where(RawCadastralLayer.id == parsed_id)
+                res = await session.execute(stmt)
+                layer = res.scalar_one_or_none()
+                if layer:
+                    layer.status = status
+                    if feature_count is not None:
+                        layer.feature_count = feature_count
+                    if detected_crs is not None:
+                        layer.srid_declared = detected_crs
+                    if bounds is not None:
+                        layer.bounds = bounds
+                    if error_message is not None:
+                        layer.error_message = error_message
+                    await session.commit()
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_update())
+        except RuntimeError:
+            asyncio.run(_update())
+    except Exception as exc:
+        logger.debug("Database sync update skipped or failed (offline/mock environment): %s", exc)
+
+
 @celery_app.task(
     base=CadastreTask,
     bind=True,
     name="backend.worker.celery_app.process_cadastral_layer_task",
     autoretry_for=(Exception,),
+    dont_autoretry_for=(ValueError,),
     retry_kwargs={"max_retries": 3},
     retry_backoff=True,
     retry_jitter=True,
@@ -138,34 +183,120 @@ def process_cadastral_layer_task(
     layer_id: str,
     file_path: Optional[str] = None,
     target_crs: Optional[str] = None,
+    normalize_geometries: bool = True,
 ) -> Dict[str, Any]:
     """Asynchronous pipeline task: Ingest, auto-detect, and validate cadastral survey layer."""
-    self.update_progress(10, "VALIDATING_FORMAT")
+    from backend.worker.ingestion_state import (
+        IngestionState,
+        IngestionStateTracker,
+        to_layer_status,
+    )
 
-    if file_path:
+    tracker = IngestionStateTracker(layer_id=layer_id)
+
+    if not file_path:
+        tracker.transition(IngestionState.VALIDATING_FORMAT, "Awaiting file payload")
+        self.update_progress(tracker.progress, tracker.state.value)
+        return {
+            "task_id": self.request.id,
+            "layer_id": layer_id,
+            "status": "PROCESSING",
+            "action": "ingest_and_validate",
+            "tracker": tracker.to_dict(),
+        }
+
+    try:
+        # Stage 1: VALIDATING_FORMAT
+        from backend.ingestion.validation import UploadValidator
+
+        tracker.transition(IngestionState.VALIDATING_FORMAT, "Validating file signature and format integrity")
+        self.update_progress(tracker.progress, tracker.state.value)
+
+        report = UploadValidator.validate_file(file_path)
+        if not report.is_valid:
+            error_msg = report.error_message or "Upload pre-flight validation failed"
+            tracker.fail(error_msg)
+            self.update_progress(tracker.progress, tracker.state.value)
+            _update_layer_record_sync(
+                layer_id=layer_id,
+                status=to_layer_status(tracker.state),
+                error_message=error_msg,
+            )
+            raise ValueError(f"Upload validation failed for layer {layer_id}: {error_msg}")
+
+        # Stage 2: INGESTING_FEATURES
         from backend.ingestion.pipeline import UnifiedIngestionDispatcher
 
-        self.update_progress(30, "INGESTING_FEATURES")
+        tracker.transition(IngestionState.INGESTING_FEATURES, "Extracting features from dataset")
+        self.update_progress(tracker.progress, tracker.state.value)
+
         result = UnifiedIngestionDispatcher.ingest_file(file_path, target_crs=target_crs)
-        self.update_progress(100, "COMPLETED")
+
+        # Stage 3: NORMALIZING_GEOMETRY (for vector layers when requested)
+        normalized_count = result.feature_count
+        if normalize_geometries and not result.is_raster:
+            from backend.normalizer import normalize_to_2d_multipolygon
+            from backend.normalizer.multipolygon import GeometryCastError
+
+            tracker.transition(IngestionState.NORMALIZING_GEOMETRY, "Normalizing geometries to 2D MultiPolygon")
+            self.update_progress(tracker.progress, tracker.state.value)
+
+            valid_norm_count = 0
+            if result.features:
+                for feat in result.features:
+                    geom = feat.geometry
+                    if geom is not None:
+                        try:
+                            norm_geom = normalize_to_2d_multipolygon(geom)
+                            feat.geometry = norm_geom
+                            valid_norm_count += 1
+                        except GeometryCastError as exc:
+                            logger.warning(
+                                "Feature %s geometry normalization skipped: %s",
+                                feat.id,
+                                exc,
+                            )
+                normalized_count = valid_norm_count
+
+        # Stage 4: COMPLETED
+        tracker.transition(
+            IngestionState.COMPLETED,
+            "Cadastral layer ingestion and normalization completed successfully",
+        )
+        self.update_progress(tracker.progress, tracker.state.value)
+
+        _update_layer_record_sync(
+            layer_id=layer_id,
+            status=to_layer_status(tracker.state),
+            feature_count=result.feature_count,
+            detected_crs=result.detected_crs,
+            bounds=list(result.bounds) if result.bounds else None,
+        )
+
         return {
             "task_id": self.request.id,
             "layer_id": layer_id,
             "format": result.format.value,
             "detected_crs": result.detected_crs,
             "feature_count": result.feature_count,
+            "normalized_count": normalized_count,
             "bounds": list(result.bounds) if result.bounds else None,
             "is_raster": result.is_raster,
-            "status": "COMPLETED",
+            "status": IngestionState.COMPLETED.value,
             "action": "ingest_and_validate",
+            "tracker": tracker.to_dict(),
+            "metadata": result.metadata,
         }
-
-    return {
-        "task_id": self.request.id,
-        "layer_id": layer_id,
-        "status": "PROCESSING",
-        "action": "ingest_and_validate",
-    }
+    except Exception as exc:
+        if not tracker.is_terminal:
+            tracker.fail(str(exc))
+            self.update_progress(tracker.progress, tracker.state.value)
+        _update_layer_record_sync(
+            layer_id=layer_id,
+            status=to_layer_status(tracker.state),
+            error_message=str(exc),
+        )
+        raise
 
 
 @celery_app.task(

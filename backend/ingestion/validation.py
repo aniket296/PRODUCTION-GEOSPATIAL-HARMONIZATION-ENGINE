@@ -661,3 +661,35 @@ class UploadValidator:
             file_size_bytes=file_size,
             details=details,
         )
+
+    @classmethod
+    def validate_file(
+        cls,
+        file_path: Union[str, Path],
+        max_size_bytes: Optional[int] = None,
+        declared_mime_type: Optional[str] = None,
+        strict_magic: bool = True,
+    ) -> UploadValidationReport:
+        """Execute full upload pre-flight validation on a file on disk."""
+        p = Path(file_path)
+        if not p.exists():
+            return UploadValidationReport(
+                is_valid=False,
+                error_code="FILE_NOT_FOUND",
+                error_message=f"File not found: {file_path}",
+            )
+        try:
+            data = p.read_bytes()
+        except Exception as exc:
+            return UploadValidationReport(
+                is_valid=False,
+                error_code="UNREADABLE_FILE",
+                error_message=f"Failed to read file: {exc}",
+            )
+        return cls.validate(
+            data=data,
+            filename=p.name,
+            max_size_bytes=max_size_bytes,
+            declared_mime_type=declared_mime_type,
+            strict_magic=strict_magic,
+        )
