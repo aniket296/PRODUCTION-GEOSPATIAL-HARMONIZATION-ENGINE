@@ -1,4 +1,4 @@
-"""Pre-flight validation for geospatial uploads: archive integrity, path safety, and header verification."""
+﻿"""Pre-flight validation for geospatial uploads: archive integrity, path safety, and header verification."""
 
 from __future__ import annotations
 
@@ -381,12 +381,120 @@ class UploadValidator:
 
         return {"dxf_type": "ASCII"}
 
+    # Declared Content-Type values accepted for each format (generic octet-stream is always tolerated).
+    ALLOWED_MIME_TYPES: Dict[SupportedFormat, Set[str]] = {
+        SupportedFormat.GEOJSON: {"application/geo+json", "application/json", "text/json", "text/plain"},
+        SupportedFormat.SHAPEFILE: {
+            "application/zip",
+            "application/x-zip-compressed",
+            "application/x-shapefile",
+            "application/vnd.shp",
+        },
+        SupportedFormat.DXF: {"image/vnd.dxf", "application/dxf", "application/x-dxf", "image/x-dxf", "text/plain"},
+        SupportedFormat.FLATGEOBUF: {"application/vnd.flatgeobuf", "application/flatgeobuf"},
+        SupportedFormat.GEOTIFF: {"image/tiff", "image/geotiff", "application/geotiff"},
+        SupportedFormat.KML: {"application/vnd.google-earth.kml+xml", "application/xml", "text/xml"},
+        SupportedFormat.KMZ: {
+            "application/vnd.google-earth.kmz",
+            "application/zip",
+            "application/x-zip-compressed",
+        },
+    }
+
+    # Filename extensions consistent with each detected format.
+    ALLOWED_EXTENSIONS: Dict[SupportedFormat, Set[str]] = {
+        SupportedFormat.GEOJSON: {".geojson", ".json"},
+        SupportedFormat.SHAPEFILE: {".zip", ".shp"},
+        SupportedFormat.DXF: {".dxf"},
+        SupportedFormat.FLATGEOBUF: {".fgb"},
+        SupportedFormat.GEOTIFF: {".tif", ".tiff", ".geotiff"},
+        SupportedFormat.KML: {".kml"},
+        SupportedFormat.KMZ: {".kmz", ".zip"},
+    }
+
+    # Signatures of executable / script payloads that must never be accepted as datasets.
+    EXECUTABLE_SIGNATURES: Tuple[Tuple[bytes, str], ...] = (
+        (b"MZ", "Windows PE executable"),
+        (b"\x7fELF", "ELF executable"),
+        (b"#!", "script with shebang"),
+        (b"\xca\xfe\xba\xbe", "Java class / Mach-O fat binary"),
+        (b"\xfe\xed\xfa", "Mach-O executable"),
+        (b"\xcf\xfa\xed\xfe", "Mach-O executable"),
+    )
+
+    @staticmethod
+    def normalize_mime_type(mime_type: Optional[str]) -> Optional[str]:
+        """Lowercase a Content-Type header value and strip parameters such as charset."""
+        if not mime_type or not mime_type.strip():
+            return None
+        return mime_type.split(";")[0].strip().lower()
+
+    @classmethod
+    def detect_executable_signature(cls, data: bytes) -> Optional[str]:
+        """Return a description when payload begins with a known executable signature."""
+        for signature, description in cls.EXECUTABLE_SIGNATURES:
+            if data.startswith(signature):
+                return description
+        return None
+
+    @classmethod
+    def verify_mime_and_extension(
+        cls,
+        detection: FormatDetectionResult,
+        filename: Optional[str] = None,
+        declared_mime_type: Optional[str] = None,
+        strict_magic: bool = True,
+    ) -> Optional[Tuple[str, str]]:
+        """Cross-check magic-byte detection against declared MIME type and filename extension.
+
+        Returns (error_code, message) on the first failed check, otherwise None.
+        """
+        fmt = detection.format
+
+        # 1. Content must be confirmed by its own bytes, not merely by the filename.
+        if strict_magic and detection.detection_method == "FILENAME_EXTENSION":
+            return (
+                "MAGIC_BYTE_MISMATCH",
+                f"Payload bytes do not match {fmt.value} signature; format was only inferred from filename",
+            )
+
+        # 2. Declared Content-Type must be consistent with the detected format.
+        declared = cls.normalize_mime_type(declared_mime_type)
+        if declared and declared != "application/octet-stream":
+            if declared not in cls.ALLOWED_MIME_TYPES.get(fmt, set()):
+                known_elsewhere = any(
+                    declared in mimes
+                    for other_fmt, mimes in cls.ALLOWED_MIME_TYPES.items()
+                    if other_fmt != fmt
+                )
+                code = "MIME_TYPE_MISMATCH" if known_elsewhere else "UNSUPPORTED_MIME_TYPE"
+                return (
+                    code,
+                    f"Declared MIME type '{declared}' is not valid for detected {fmt.value} payload",
+                )
+
+        # 3. Filename extension must be consistent with the detected format.
+        if filename:
+            ext = Path(filename).suffix.lower()
+            if ext:
+                allowed_ext = cls.ALLOWED_EXTENSIONS.get(fmt, set())
+                known_exts = set().union(*cls.ALLOWED_EXTENSIONS.values())
+                if ext in known_exts and ext not in allowed_ext:
+                    return (
+                        "EXTENSION_MISMATCH",
+                        f"File extension '{ext}' does not match detected {fmt.value} content",
+                    )
+
+        return None
+
     @classmethod
     def validate(
         cls,
         data: bytes,
         filename: Optional[str] = None,
         max_size_bytes: Optional[int] = None,
+        declared_mime_type: Optional[str] = None,
+        strict_magic: bool = True,
     ) -> UploadValidationReport:
         """Execute full upload pre-flight validation suite."""
         max_size = max_size_bytes or cls.DEFAULT_MAX_UPLOAD_SIZE
@@ -408,6 +516,15 @@ class UploadValidator:
                 error_message=f"Payload size ({file_size} bytes) exceeds limit ({max_size} bytes)",
             )
 
+        executable = cls.detect_executable_signature(data)
+        if executable:
+            return UploadValidationReport(
+                is_valid=False,
+                file_size_bytes=file_size,
+                error_code="EXECUTABLE_PAYLOAD",
+                error_message=f"Upload rejected: payload is a {executable}, not a geospatial dataset",
+            )
+
         try:
             det = GeospatialFormatDetector.detect_bytes(data, filename=filename)
         except CorruptDataError as exc:
@@ -425,9 +542,33 @@ class UploadValidator:
                 error_message=str(exc),
             )
 
+        mismatch = cls.verify_mime_and_extension(
+            det,
+            filename=filename,
+            declared_mime_type=declared_mime_type,
+            # ZIP containers are verified by archive inspection below, which reports specific security errors.
+            strict_magic=strict_magic and not data.startswith(b"PK"),
+        )
+        if mismatch:
+            return UploadValidationReport(
+                is_valid=False,
+                format=det.format,
+                mime_type=det.mime_type,
+                file_size_bytes=file_size,
+                error_code=mismatch[0],
+                error_message=mismatch[1],
+                details={
+                    "detection_method": det.detection_method,
+                    "confidence": det.confidence,
+                    "declared_mime_type": cls.normalize_mime_type(declared_mime_type),
+                },
+            )
+
         details: Dict[str, Any] = {
             "detection_method": det.detection_method,
             "confidence": det.confidence,
+            "declared_mime_type": cls.normalize_mime_type(declared_mime_type),
+            "magic_verified": det.detection_method != "FILENAME_EXTENSION",
         }
 
         try:

@@ -1,4 +1,4 @@
-"""Tests for corrupt archive, path traversal, zip bombs, and malformed header rejection."""
+﻿"""Tests for corrupt archive, path traversal, zip bombs, and malformed header rejection."""
 
 import io
 import json
@@ -442,7 +442,7 @@ def test_validator_zip_bomb_report():
 def test_validator_malformed_header_report():
     """Verify corrupt FlatGeobuf header produces structured MALFORMED_HEADER report."""
     bad_fgb = b"bad\x03fgb\x00\x00\x00\x00\x00\x00\x00\x00\x00"
-    rep = UploadValidator.validate(bad_fgb, filename="bad.fgb")
+    rep = UploadValidator.validate(bad_fgb, filename="bad.fgb", strict_magic=False)
     assert rep.is_valid is False
     assert rep.error_code == "MALFORMED_HEADER"
 
@@ -462,3 +462,122 @@ def test_upload_validation_report_to_dict():
     assert d["mime_type"] == "application/geo+json"
     assert d["file_size_bytes"] == 42
     assert d["details"]["features_count"] == 5
+
+
+# ---------------------------------------------------------------------------
+# MIME Type, Magic Byte and Extension Verification Tests (Step 48)
+# ---------------------------------------------------------------------------
+
+
+def _valid_geojson_bytes() -> bytes:
+    return json.dumps({"type": "FeatureCollection", "features": []}).encode("utf-8")
+
+
+def test_normalize_mime_type_strips_parameters_and_case():
+    assert UploadValidator.normalize_mime_type("Application/GEO+JSON; charset=UTF-8") == "application/geo+json"
+    assert UploadValidator.normalize_mime_type("  ") is None
+    assert UploadValidator.normalize_mime_type(None) is None
+
+
+def test_declared_mime_matching_detected_format_accepted():
+    rep = UploadValidator.validate(
+        _valid_geojson_bytes(), filename="parcels.geojson", declared_mime_type="application/geo+json; charset=utf-8"
+    )
+    assert rep.is_valid is True
+    assert rep.details["declared_mime_type"] == "application/geo+json"
+    assert rep.details["magic_verified"] is True
+
+
+def test_generic_octet_stream_mime_tolerated():
+    rep = UploadValidator.validate(
+        _valid_geojson_bytes(), filename="parcels.geojson", declared_mime_type="application/octet-stream"
+    )
+    assert rep.is_valid is True
+
+
+def test_declared_mime_conflicting_with_detected_format_rejected():
+    # GeoJSON bytes uploaded while claiming to be a TIFF image
+    rep = UploadValidator.validate(
+        _valid_geojson_bytes(), filename="parcels.geojson", declared_mime_type="image/tiff"
+    )
+    assert rep.is_valid is False
+    assert rep.error_code == "MIME_TYPE_MISMATCH"
+    assert rep.format == SupportedFormat.GEOJSON
+
+
+def test_unknown_declared_mime_rejected():
+    rep = UploadValidator.validate(
+        _valid_geojson_bytes(), filename="parcels.geojson", declared_mime_type="video/mp4"
+    )
+    assert rep.is_valid is False
+    assert rep.error_code == "UNSUPPORTED_MIME_TYPE"
+
+
+def test_shapefile_zip_accepts_zip_mime_types():
+    data = _create_minimal_valid_shapefile_zip()
+    for mime in ("application/zip", "application/x-zip-compressed"):
+        rep = UploadValidator.validate(data, filename="survey.zip", declared_mime_type=mime)
+        assert rep.is_valid is True, mime
+
+
+def test_extension_mismatch_with_magic_bytes_rejected():
+    # FlatGeobuf bytes disguised with a .tif extension
+    fgb = build_synthetic_fgb_payload(name="kalianpur", features_count=3)
+    rep = UploadValidator.validate(fgb, filename="orthophoto.tif")
+    assert rep.is_valid is False
+    assert rep.error_code == "EXTENSION_MISMATCH"
+    assert rep.format == SupportedFormat.FLATGEOBUF
+
+
+def test_unknown_extension_with_valid_magic_is_accepted():
+    rep = UploadValidator.validate(_valid_geojson_bytes(), filename="upload.dat")
+    assert rep.is_valid is True
+
+
+def test_filename_only_detection_rejected_when_strict_magic():
+    # Garbage bytes labelled .fgb are not a FlatGeobuf file
+    rep = UploadValidator.validate(b"bad\x03fgb\x00" + b"\x00" * 16, filename="fake.fgb")
+    assert rep.is_valid is False
+    assert rep.error_code == "MAGIC_BYTE_MISMATCH"
+
+
+def test_filename_only_detection_allowed_when_strict_magic_disabled():
+    rep = UploadValidator.validate(b"bad\x03fgb\x00" + b"\x00" * 16, filename="fake.fgb", strict_magic=False)
+    assert rep.is_valid is False
+    assert rep.error_code == "MALFORMED_HEADER"
+
+
+@pytest.mark.parametrize(
+    "payload,label",
+    [
+        (b"MZ\x90\x00" + b"\x00" * 64, "Windows PE"),
+        (b"\x7fELF\x02\x01\x01" + b"\x00" * 64, "ELF"),
+        (b"#!/bin/sh\nrm -rf /\n", "shebang"),
+    ],
+)
+def test_executable_payloads_rejected_even_with_geo_extension(payload, label):
+    rep = UploadValidator.validate(payload, filename="parcels.geojson", declared_mime_type="application/geo+json")
+    assert rep.is_valid is False
+    assert rep.error_code == "EXECUTABLE_PAYLOAD"
+    assert label.split()[0].lower() in rep.error_message.lower() or "executable" in rep.error_message.lower()
+
+
+def test_verify_mime_and_extension_returns_none_for_consistent_upload():
+    from backend.ingestion.pipeline import GeospatialFormatDetector
+
+    det = GeospatialFormatDetector.detect_bytes(_valid_geojson_bytes(), filename="a.geojson")
+    assert UploadValidator.verify_mime_and_extension(det, "a.geojson", "application/json") is None
+
+
+def test_allowed_mime_and_extension_tables_cover_all_formats():
+    for fmt in (
+        SupportedFormat.GEOJSON,
+        SupportedFormat.SHAPEFILE,
+        SupportedFormat.DXF,
+        SupportedFormat.FLATGEOBUF,
+        SupportedFormat.GEOTIFF,
+        SupportedFormat.KML,
+        SupportedFormat.KMZ,
+    ):
+        assert UploadValidator.ALLOWED_MIME_TYPES[fmt]
+        assert UploadValidator.ALLOWED_EXTENSIONS[fmt]
