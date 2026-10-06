@@ -1,4 +1,4 @@
-﻿"""Pre-flight validation for geospatial uploads: archive integrity, path safety, and header verification."""
+"""Pre-flight validation for geospatial uploads: archive integrity, path safety, and header verification."""
 
 from __future__ import annotations
 

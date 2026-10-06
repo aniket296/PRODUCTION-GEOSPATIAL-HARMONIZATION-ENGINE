@@ -11,6 +11,16 @@ from backend.worker.celery_app import (
     process_cadastral_layer_task,
 )
 
+from backend.worker.ingestion_state import (
+    IngestionState,
+    IngestionStateTracker,
+    InvalidStateTransitionError,
+    allowed_transitions,
+    can_transition,
+    is_terminal,
+    to_layer_status,
+)
+
 __all__ = [
     "CadastreTask",
     "celery_app",
@@ -20,4 +30,11 @@ __all__ = [
     "detect_topology_errors_task",
     "auto_heal_topology_task",
     "export_harmonized_layer_task",
+    "IngestionState",
+    "IngestionStateTracker",
+    "InvalidStateTransitionError",
+    "allowed_transitions",
+    "can_transition",
+    "is_terminal",
+    "to_layer_status",
 ]
