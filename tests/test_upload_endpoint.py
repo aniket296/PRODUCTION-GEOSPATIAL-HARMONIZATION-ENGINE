@@ -44,6 +44,9 @@ def configure_test_environment(monkeypatch):
     mock_async_result = MagicMock()
     mock_async_result.id = generated_job_id
     monkeypatch.setattr(process_cadastral_layer_task, "delay", MagicMock(return_value=mock_async_result))
+    # Mock MinIO storage upload by default for offline fast test execution
+    from backend.storage.minio_client import MinioStorageClient
+    monkeypatch.setattr(MinioStorageClient, "upload_file", MagicMock(return_value="s3://cadastral-raw/mock-path"))
 
     yield
 
@@ -249,3 +252,70 @@ def test_upload_oversized_payload_rejected_http_413(client, monkeypatch):
 
     assert response.status_code == 413
     assert "exceeds maximum limit" in response.json()["detail"]
+
+
+def test_upload_persists_raw_layer_in_db(client, sample_geojson_bytes):
+    """Verify RawCadastralLayer model is populated with upload metadata and added to DB session."""
+    from backend.db.session import get_async_session
+    from backend.models.layer import RawCadastralLayer
+
+    persisted_layers = []
+    mock_session = AsyncMock()
+    mock_session.add = MagicMock(side_effect=lambda layer: persisted_layers.append(layer))
+    mock_session.commit = AsyncMock()
+
+    app.dependency_overrides[get_async_session] = lambda: mock_session
+
+    try:
+        files = {
+            "file": ("revenue_map.geojson", sample_geojson_bytes, "application/geo+json")
+        }
+        response = client.post(
+            "/api/v1/layers/upload",
+            files=files,
+            data={"layer_name": "Revenue Map 2026", "declared_crs": "EPSG:4326"},
+        )
+        assert response.status_code == 202
+        assert len(persisted_layers) == 1
+        layer = persisted_layers[0]
+        assert isinstance(layer, RawCadastralLayer)
+        assert layer.name == "Revenue Map 2026"
+        assert layer.filename == "revenue_map.geojson"
+        assert layer.file_format == "GEOJSON"
+        assert layer.source_crs == "EPSG:4326"
+        assert layer.metadata_json["file_size_bytes"] == len(sample_geojson_bytes)
+        assert layer.metadata_json["detected_format"] == "GEOJSON"
+        mock_session.commit.assert_awaited_once()
+    finally:
+        app.dependency_overrides.pop(get_async_session, None)
+
+
+def test_upload_minio_storage_upload_attempt(client, sample_geojson_bytes, monkeypatch):
+    """Verify upload handler attempts to store raw asset in MinIO S3 bucket."""
+    from backend.storage.minio_client import MinioStorageClient
+
+    mock_upload = MagicMock(return_value="s3://cadastral-raw/mock-path")
+    monkeypatch.setattr(MinioStorageClient, "upload_file", mock_upload)
+
+    files = {
+        "file": ("survey.geojson", sample_geojson_bytes, "application/geo+json")
+    }
+    response = client.post("/api/v1/layers/upload", files=files)
+    assert response.status_code == 202
+
+    mock_upload.assert_called_once()
+    call_kwargs = mock_upload.call_args.kwargs
+    assert call_kwargs["bucket_name"] == "cadastral-raw"
+    assert "survey.geojson" in call_kwargs["object_name"]
+
+
+def test_upload_corrupt_zip_rejected_http_400(client):
+    """Verify corrupt zip archive upload is rejected with HTTP 400 Bad Request."""
+    corrupt_zip = b"PK\x03\x04" + b"CORRUPT_BYTES_NOT_A_ZIP" * 5
+    files = {
+        "file": ("corrupt.zip", corrupt_zip, "application/zip")
+    }
+    response = client.post("/api/v1/layers/upload", files=files)
+    assert response.status_code == 400
+    assert "rejected" in response.json()["detail"].lower()
+

@@ -106,8 +106,40 @@ async def upload_cadastral_layer(
 
     resolved_name = layer_name or Path(file.filename).stem
     detected_format = validation_report.format.value if validation_report.format else "UNKNOWN"
+    storage_path = str(staged_path)
+
+    # Attempt upload to S3/MinIO bucket (best effort, graceful fallback to staging disk)
+    try:
+        from backend.storage.minio_client import MinioStorageClient
+
+        storage_client = MinioStorageClient()
+        object_name = f"{layer_id}/{file.filename}"
+        storage_client.upload_file(
+            bucket_name=settings.minio_bucket_raw,
+            object_name=object_name,
+            file_data=content,
+            content_type=validation_report.mime_type or file.content_type,
+            metadata={
+                "layer_id": str(layer_id),
+                "format": detected_format,
+                "original_filename": file.filename,
+            },
+        )
+        storage_path = f"s3://{settings.minio_bucket_raw}/{object_name}"
+    except Exception as exc:
+        logger.debug("MinIO S3 upload skipped or unreachable: %s", exc)
 
     now = datetime.now(timezone.utc)
+    metadata_payload = {
+        "upload_filename": file.filename,
+        "declared_mime_type": file.content_type,
+        "detected_format": detected_format,
+        "file_size_bytes": file_size,
+        "normalize_geometries": normalize_geometries,
+        "staging_path": str(staged_path),
+        "storage_path": storage_path,
+        "validation_details": validation_report.details,
+    }
 
     # 4. Best-effort DB persistence (handles both live database and test environments)
     if session is not None:
@@ -116,10 +148,11 @@ async def upload_cadastral_layer(
                 name=resolved_name,
                 filename=file.filename,
                 file_format=detected_format,
-                storage_path=str(staged_path),
+                storage_path=storage_path,
                 source_crs=declared_crs,
                 target_crs=target_crs or "EPSG:4326",
                 status=LayerStatus.PENDING.value,
+                metadata_json=metadata_payload,
             )
             raw_layer.id = layer_id
             session.add(raw_layer)
@@ -151,6 +184,7 @@ async def upload_cadastral_layer(
         message="Layer upload accepted for asynchronous processing",
         filename=file.filename,
         file_size_bytes=file_size,
+        detected_format=detected_format,
         declared_crs=declared_crs,
         target_crs=target_crs or "EPSG:4326",
         created_at=now,

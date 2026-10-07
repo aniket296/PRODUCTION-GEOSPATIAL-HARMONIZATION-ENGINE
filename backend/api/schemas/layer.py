@@ -22,6 +22,8 @@ class LayerUploadResponse(BaseModel):
     )
     filename: str = Field(description="Original uploaded file name")
     file_size_bytes: int = Field(description="Size of the uploaded payload in bytes")
+    detected_format: Optional[str] = Field(default=None, description="Auto-detected geospatial format")
     declared_crs: Optional[str] = Field(default=None, description="User declared coordinate reference system")
     target_crs: str = Field(default="EPSG:4326", description="Target harmonization CRS")
     created_at: datetime = Field(description="Timestamp when the upload was registered")
+
