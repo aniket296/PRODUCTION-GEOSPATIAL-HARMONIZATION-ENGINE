@@ -141,7 +141,22 @@ async def upload_cadastral_layer(
         "validation_details": validation_report.details,
     }
 
-    # 4. Best-effort DB persistence (handles both live database and test environments)
+    # 4. Dispatch Celery task
+    try:
+        celery_task = process_cadastral_layer_task.delay(
+            layer_id=str(layer_id),
+            file_path=str(staged_path),
+            target_crs=target_crs,
+            normalize_geometries=normalize_geometries,
+        )
+        job_id = celery_task.id
+    except Exception as err:
+        logger.warning("Celery dispatch unavailable or falling back: %s", err)
+        job_id = f"job-{uuid.uuid4()}"
+
+    metadata_payload["job_id"] = job_id
+
+    # 5. Best-effort DB persistence (handles both live database and test environments)
     if session is not None:
         try:
             raw_layer = RawCadastralLayer(
@@ -160,19 +175,6 @@ async def upload_cadastral_layer(
         except Exception as err:
             logger.warning("Could not persist layer record to DB in upload handler: %s", err)
             await session.rollback()
-
-    # 5. Dispatch Celery task
-    try:
-        celery_task = process_cadastral_layer_task.delay(
-            layer_id=str(layer_id),
-            file_path=str(staged_path),
-            target_crs=target_crs,
-            normalize_geometries=normalize_geometries,
-        )
-        job_id = celery_task.id
-    except Exception as err:
-        logger.warning("Celery dispatch unavailable or falling back: %s", err)
-        job_id = f"job-{uuid.uuid4()}"
 
     # Set Location header pointing to layer status polling endpoint
     response.headers["Location"] = f"/api/v1/layers/{layer_id}/status"
@@ -238,6 +240,29 @@ async def get_layer_status(
         stage = "QUEUED"
         progress_percent = 0
 
+    # Live Celery AsyncResult inspection if background task is active
+    job_id = layer.metadata_json.get("job_id") if layer.metadata_json else None
+    if job_id and status_val in (LayerStatus.PENDING.value, LayerStatus.PROCESSING.value):
+        try:
+            from backend.worker.celery_app import celery_app
+
+            async_res = celery_app.AsyncResult(job_id)
+            if async_res.state == "PROGRESS":
+                info = async_res.info or {}
+                if isinstance(info, dict):
+                    stage = info.get("stage", stage)
+                    progress_percent = int(info.get("percent", progress_percent))
+            elif async_res.state == "SUCCESS":
+                stage = "COMPLETED"
+                progress_percent = 100
+            elif async_res.state == "FAILURE":
+                stage = "FAILED"
+                progress_percent = 100
+                if not layer.error_message and async_res.result:
+                    layer.error_message = str(async_res.result)
+        except Exception as exc:
+            logger.debug("Could not inspect Celery AsyncResult for %s: %s", job_id, exc)
+
     # Bounds resolution
     resolved_bounds: Optional[List[float]] = None
     if layer.bounding_box:
@@ -254,16 +279,26 @@ async def get_layer_status(
         elif isinstance(layer.bounding_box, (list, tuple)):
             resolved_bounds = [float(x) for x in layer.bounding_box]
 
+    is_raster = bool(
+        layer.file_format in ("GEOTIFF", "TIFF")
+        or (layer.metadata_json and layer.metadata_json.get("is_raster", False))
+    )
+
     return LayerStatusResponse(
         layer_id=str(layer.id),
         name=layer.name,
+        filename=layer.filename,
+        file_format=layer.file_format,
         status=layer.status,
         stage=stage,
         progress_percent=progress_percent,
         feature_count=layer.feature_count or 0,
+        total_area_sqm=layer.total_area_sqm,
+        is_raster=is_raster,
         detected_crs=layer.source_crs,
         bounds=resolved_bounds,
         error_message=layer.error_message,
+        job_id=job_id,
         created_at=layer.created_at,
         updated_at=layer.updated_at,
         metadata=layer.metadata_json,

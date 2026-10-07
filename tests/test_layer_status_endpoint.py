@@ -239,3 +239,72 @@ def test_get_layer_status_list_bounds_format(client):
         assert data["bounds"] == bbox_list
     finally:
         app.dependency_overrides.pop(get_async_session, None)
+
+
+def test_get_layer_status_live_celery_task_progress(client, monkeypatch):
+    """Verify in-flight Celery task progress is inspected and returned in status response."""
+    from backend.worker.celery_app import celery_app
+
+    test_id = uuid.uuid4()
+    job_id = "celery-job-777"
+    mock_layer = _mock_layer(
+        test_id,
+        status=LayerStatus.PROCESSING.value,
+    )
+    mock_layer.metadata_json = {"job_id": job_id}
+
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_layer
+    mock_session.execute.return_value = mock_result
+
+    app.dependency_overrides[get_async_session] = lambda: mock_session
+
+    mock_async_res = MagicMock()
+    mock_async_res.state = "PROGRESS"
+    mock_async_res.info = {"percent": 75, "stage": "NORMALIZING_GEOMETRY"}
+    monkeypatch.setattr(celery_app, "AsyncResult", MagicMock(return_value=mock_async_res))
+
+    try:
+        response = client.get(f"/api/v1/layers/{test_id}/status")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "PROCESSING"
+        assert data["stage"] == "NORMALIZING_GEOMETRY"
+        assert data["progress_percent"] == 75
+        assert data["job_id"] == job_id
+    finally:
+        app.dependency_overrides.pop(get_async_session, None)
+
+
+def test_get_layer_status_total_area_and_raster_flag(client):
+    """Verify total area and is_raster flag are populated accurately."""
+    test_id = uuid.uuid4()
+    mock_layer = _mock_layer(
+        test_id,
+        name="Orthomosaic 2026",
+        status=LayerStatus.COMPLETED.value,
+        feature_count=1,
+    )
+    mock_layer.file_format = "GEOTIFF"
+    mock_layer.total_area_sqm = 450000.75
+
+    mock_session = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = mock_layer
+    mock_session.execute.return_value = mock_result
+
+    app.dependency_overrides[get_async_session] = lambda: mock_session
+
+    try:
+        response = client.get(f"/api/v1/layers/{test_id}/status")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "Orthomosaic 2026"
+        assert data["file_format"] == "GEOTIFF"
+        assert data["is_raster"] is True
+        assert data["total_area_sqm"] == 450000.75
+    finally:
+        app.dependency_overrides.pop(get_async_session, None)
+
+
