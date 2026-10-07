@@ -23,7 +23,7 @@ from fastapi import (
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.schemas.layer import LayerUploadResponse
+from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
 from backend.core.config import get_settings
 from backend.db.session import get_async_session
 from backend.ingestion.validation import UploadValidator
@@ -189,3 +189,83 @@ async def upload_cadastral_layer(
         target_crs=target_crs or "EPSG:4326",
         created_at=now,
     )
+
+
+@router.get(
+    "/{layer_id}/status",
+    response_model=LayerStatusResponse,
+    summary="Get processing lifecycle status and progress of a cadastral layer",
+)
+async def get_layer_status(
+    layer_id: uuid.UUID,
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> LayerStatusResponse:
+    """Retrieve real-time processing status, progress percentage, feature count, and diagnostics for a cadastral layer."""
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable",
+        )
+
+    stmt = select(RawCadastralLayer).where(RawCadastralLayer.id == layer_id)
+    result = await session.execute(stmt)
+    layer = result.scalar_one_or_none()
+
+    if layer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cadastral layer {layer_id} not found",
+        )
+
+    # Progress and stage resolution
+    status_val = layer.status
+    stage: str
+    progress_percent: int
+
+    if status_val == LayerStatus.COMPLETED.value:
+        stage = "COMPLETED"
+        progress_percent = 100
+    elif status_val == LayerStatus.FAILED.value:
+        stage = "FAILED"
+        progress_percent = 100
+    elif status_val == LayerStatus.PROCESSING.value:
+        stage = "INGESTING_FEATURES"
+        progress_percent = 50
+    elif status_val == LayerStatus.CALIBRATED.value:
+        stage = "CALIBRATED"
+        progress_percent = 100
+    else:  # PENDING or UPLOADING
+        stage = "QUEUED"
+        progress_percent = 0
+
+    # Bounds resolution
+    resolved_bounds: Optional[List[float]] = None
+    if layer.bounding_box:
+        if isinstance(layer.bounding_box, dict):
+            if all(k in layer.bounding_box for k in ("minx", "miny", "maxx", "maxy")):
+                resolved_bounds = [
+                    float(layer.bounding_box["minx"]),
+                    float(layer.bounding_box["miny"]),
+                    float(layer.bounding_box["maxx"]),
+                    float(layer.bounding_box["maxy"]),
+                ]
+            elif "bounds" in layer.bounding_box and isinstance(layer.bounding_box["bounds"], list):
+                resolved_bounds = [float(x) for x in layer.bounding_box["bounds"]]
+        elif isinstance(layer.bounding_box, (list, tuple)):
+            resolved_bounds = [float(x) for x in layer.bounding_box]
+
+    return LayerStatusResponse(
+        layer_id=str(layer.id),
+        name=layer.name,
+        status=layer.status,
+        stage=stage,
+        progress_percent=progress_percent,
+        feature_count=layer.feature_count or 0,
+        detected_crs=layer.source_crs,
+        bounds=resolved_bounds,
+        error_message=layer.error_message,
+        created_at=layer.created_at,
+        updated_at=layer.updated_at,
+        metadata=layer.metadata_json,
+    )
+
