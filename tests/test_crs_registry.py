@@ -227,6 +227,160 @@ class TestCustomCadastralRegistration:
         assert data["unit"] == "degree"
         assert "ellipsoid" in data
         assert data["ellipsoid"]["name"] == "WGS 84"
+        assert "area_sq_deg" in data
+        assert data["area_sq_deg"] > 0
 
         pyproj_crs = rec.to_pyproj_crs()
         assert pyproj_crs.to_epsg() == 4326
+
+
+class TestCRSSerializationFormats:
+    """Tests for WKT, PROJ JSON, and PROJ4 string exports."""
+
+    def test_to_wkt_export(self):
+        rec = crs_registry.get(4326)
+        wkt = rec.to_wkt()
+        assert "GEOGCRS" in wkt or "GEODCRS" in wkt
+        assert "WGS 84" in wkt
+
+    def test_to_proj_json_export(self):
+        rec = crs_registry.get(32643)
+        json_dict = rec.to_proj_json()
+        assert isinstance(json_dict, dict)
+        assert json_dict["type"] == "ProjectedCRS"
+
+    def test_to_proj4_export(self):
+        rec = crs_registry.get(4326)
+        proj4 = rec.to_proj4()
+        assert proj4 is not None
+        assert "+proj=longlat" in proj4
+
+
+class TestLocalCadastralGrid:
+    """Tests for village cadastral engineering reference systems."""
+
+    def test_local_cadastral_grid_registration(self):
+        from backend.geodetic import LocalCadastralGrid
+
+        grid = LocalCadastralGrid(
+            grid_id="VILLAGE_SHIVAJINAGAR_01",
+            name="Shivajinagar Cadastral Village Grid",
+            village_name="Shivajinagar",
+            district="Pune",
+            state="Maharashtra",
+            origin_lon=73.8567,
+            origin_lat=18.5204,
+            false_easting=10000.0,
+            false_northing=10000.0,
+            scale_factor=0.99995,
+            extent_radius_km=15.0,
+        )
+
+        rec = crs_registry.register_local_cadastral_grid(grid)
+        assert rec.srid == "LOCAL:VILLAGE_SHIVAJINAGAR_01"
+        assert rec.proj_type == "LOCAL"
+        assert rec.ellipsoid.name == "Everest 1830 (1975 Definition)"
+        assert "+proj=tmerc" in rec.proj4
+        assert "+lat_0=18.5204" in rec.proj4
+        assert "+lon_0=73.8567" in rec.proj4
+
+        # Verify lookup by alias
+        alias_rec = crs_registry.get("SHIVAJINAGAR_GRID")
+        assert alias_rec is not None
+        assert alias_rec.srid == "LOCAL:VILLAGE_SHIVAJINAGAR_01"
+
+
+class TestToposheetParser:
+    """Tests for Survey of India 1:1M, 1:250k, and 1:50k toposheet grid parsing."""
+
+    def test_parse_million_sheet(self):
+        res = crs_registry.parse_soi_toposheet("53")
+        assert res["sheet_id"] == "53"
+        assert res["scale"] == "1:1,000,000"
+        # Sheet 53 is Lon 76-80, Lat 28-32
+        assert res["bounds"] == (76.0, 28.0, 80.0, 32.0)
+        assert res["suggested_utm_epsg"] == 32643 or res["suggested_utm_epsg"] == 32644
+
+    def test_parse_degree_sheet_delhi(self):
+        # 53H covers Delhi (Lon 77-78, Lat 28-29)
+        res = crs_registry.parse_soi_toposheet("53H")
+        assert res["sheet_id"] == "53H"
+        assert res["scale"] == "1:250,000"
+        assert res["bounds"] == (77.0, 28.0, 78.0, 29.0)
+        assert res["suggested_utm_epsg"] == 32643
+        assert res["suggested_soi_epsg"] == 24378 or res["suggested_soi_epsg"] == 24379
+
+    def test_parse_fifty_thousand_sheet(self):
+        # 53H/2 is sub-sheet of 53H
+        res = crs_registry.parse_soi_toposheet("53H/2")
+        assert res["sheet_id"] == "53H/2"
+        assert res["scale"] == "1:50,000"
+        w, s, e, n = res["bounds"]
+        assert pytest.approx(e - w, rel=1e-5) == 0.25
+        assert pytest.approx(n - s, rel=1e-5) == 0.25
+        assert 77.0 <= w < e <= 78.0
+        assert 28.0 <= s < n <= 29.0
+
+    def test_parse_invalid_toposheet(self):
+        with pytest.raises(CRSValidationError):
+            crs_registry.parse_soi_toposheet("999XYZ")
+
+        with pytest.raises(CRSValidationError):
+            crs_registry.parse_soi_toposheet("53H/20")  # > 16
+
+
+class TestStateCRSLookup:
+    """Tests for Indian State & UT geodetic presets."""
+
+    def test_lookup_state_by_code(self):
+        res = crs_registry.get_crs_for_state("MH")
+        assert res is not None
+        assert res["state_name"] == "Maharashtra"
+        assert res["recommended_utm_epsg"] == 32643
+        assert res["recommended_soi_epsg"] == 24381
+
+    def test_lookup_state_by_name(self):
+        res = crs_registry.get_crs_for_state("Karnataka")
+        assert res is not None
+        assert res["state_code"] == "KA"
+        assert res["recommended_utm_epsg"] == 32643
+        assert res["recommended_soi_epsg"] == 24381
+
+    def test_lookup_state_unknown(self):
+        assert crs_registry.get_crs_for_state("UNKNOWN_TERRITORY") is None
+
+
+class TestSpatialEnvelopeMatching:
+    """Tests for finding matching CRS for an envelope sorted by domain specificity."""
+
+    def test_find_matching_crs_delhi_envelope(self):
+        delhi_bbox = (76.8, 28.4, 77.4, 28.9)
+        matches = crs_registry.find_matching_crs(delhi_bbox, proj_type="PROJECTED")
+        assert len(matches) > 0
+        # The tightest/most specific regional projection should appear before global
+        first = matches[0]
+        assert "UTM" in first.name or "Kalianpur" in first.name
+        # Verify all returned are PROJECTED
+        for m in matches:
+            assert m.proj_type == "PROJECTED"
+
+
+class TestCRSSearch:
+    """Tests for text search across CRS catalog."""
+
+    def test_search_by_keyword(self):
+        results = crs_registry.search("Kalianpur", limit=10)
+        assert len(results) > 0
+        assert all(
+            "kalianpur" in r.name.lower()
+            or "kalianpur" in r.datum_name.lower()
+            or any("kalianpur" in a.lower() for a in r.aliases)
+            for r in results
+        )
+
+    def test_search_by_exact_srid(self):
+        results = crs_registry.search("EPSG:3857")
+        assert len(results) > 0
+        assert results[0].srid == "EPSG:3857"
+
+
