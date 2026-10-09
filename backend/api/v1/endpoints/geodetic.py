@@ -12,6 +12,12 @@ from backend.api.schemas.geodetic import (
     CRSSummaryResponse,
     CRSValidationRequest,
     CRSValidationResponse,
+    CoordinateTransformBatchRequest,
+    CoordinateTransformBatchResponse,
+    CoordinateTransformPointRequest,
+    CoordinateTransformPointResponse,
+    HelmertFitRequest,
+    HelmertFitResponse,
     LocalCadastralGridRequest,
     ToposheetResponse,
 )
@@ -19,8 +25,13 @@ from backend.geodetic import (
     CRSNotFoundError,
     CRSOutOfBoundsError,
     CRSValidationError,
+    HelmertConvention,
+    HelmertFitter,
     LocalCadastralGrid,
+    TransformationError,
     crs_registry,
+    get_transformation_pipeline,
+    transform_coordinates_batch,
 )
 
 router = APIRouter(prefix="/geodetic", tags=["geodetic"])
@@ -227,3 +238,100 @@ def parse_toposheet(sheet_id: str) -> ToposheetResponse:
         )
     except CRSValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/transform/point", response_model=CoordinateTransformPointResponse, status_code=status.HTTP_200_OK)
+def transform_point_coordinate(request: CoordinateTransformPointRequest) -> CoordinateTransformPointResponse:
+    """Transform a single coordinate between two geodetic datums."""
+    pipeline = get_transformation_pipeline(request.source_srid, request.target_srid)
+    if not pipeline:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unable to establish transformation pipeline from '{request.source_srid}' to '{request.target_srid}'.",
+        )
+
+    coords = request.coordinates
+    if len(coords) < 2 or len(coords) > 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Coordinates must have 2 elements [lon, lat] or 3 elements [lon, lat, height].",
+        )
+
+    lon, lat = coords[0], coords[1]
+    h = coords[2] if len(coords) == 3 else 0.0
+
+    try:
+        t_lon, t_lat, t_h = pipeline.transform(lon, lat, h)
+    except TransformationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    out_coords = [t_lon, t_lat, t_h] if len(coords) == 3 else [t_lon, t_lat]
+
+    return CoordinateTransformPointResponse(
+        source_srid=request.source_srid,
+        target_srid=request.target_srid,
+        transformed_coordinates=out_coords,
+    )
+
+
+@router.post("/transform/batch", response_model=CoordinateTransformBatchResponse, status_code=status.HTTP_200_OK)
+def transform_batch_coordinates(request: CoordinateTransformBatchRequest) -> CoordinateTransformBatchResponse:
+    """Batch transform multiple coordinates between two geodetic datums."""
+    pipeline = get_transformation_pipeline(request.source_srid, request.target_srid)
+    if not pipeline:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unable to establish transformation pipeline from '{request.source_srid}' to '{request.target_srid}'.",
+        )
+
+    tuple_coords = [tuple(c) for c in request.coordinates]
+    try:
+        transformed = transform_coordinates_batch(tuple_coords, pipeline)
+    except TransformationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    return CoordinateTransformBatchResponse(
+        source_srid=request.source_srid,
+        target_srid=request.target_srid,
+        transformed_coordinates=[list(c) for c in transformed],
+        count=len(transformed),
+    )
+
+
+@router.post("/transform/fit-helmert", response_model=HelmertFitResponse, status_code=status.HTTP_200_OK)
+def fit_helmert_from_gcps(request: HelmertFitRequest) -> HelmertFitResponse:
+    """Compute least-squares 7-parameter Helmert transformation from Ground Control Point pairs."""
+    try:
+        convention_enum = HelmertConvention(request.convention.upper())
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid convention '{request.convention}'. Must be 'POSITION_VECTOR' or 'COORDINATE_FRAME'.",
+        )
+
+    source_pts = [tuple(g.source_xyz) for g in request.gcps]  # type: ignore
+    target_pts = [tuple(g.target_xyz) for g in request.gcps]  # type: ignore
+
+    try:
+        result = HelmertFitter.fit(
+            source_pts,
+            target_pts,
+            convention=convention_enum,
+            is_molodensky_badekas=request.is_molodensky_badekas,
+        )
+    except TransformationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    res_dict = result.to_dict()
+    return HelmertFitResponse(
+        parameters=res_dict["parameters"],
+        rmse_3d=res_dict["rmse_3d"],
+        rmse_x=res_dict["rmse_x"],
+        rmse_y=res_dict["rmse_y"],
+        rmse_z=res_dict["rmse_z"],
+        num_points=res_dict["num_points"],
+        degrees_of_freedom=res_dict["degrees_of_freedom"],
+        sigma_0=res_dict["sigma_0"],
+        residuals=res_dict["residuals"],
+    )
+

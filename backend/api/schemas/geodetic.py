@@ -97,3 +97,66 @@ class ToposheetResponse(BaseModel):
     centroid: List[float] = Field(..., description="Centroid [longitude, latitude]")
     suggested_utm_epsg: int = Field(..., description="Recommended UTM zone EPSG code")
     suggested_soi_epsg: Optional[int] = Field(None, description="Recommended Kalianpur 1975 zone EPSG code")
+
+
+class CoordinateTransformPointRequest(BaseModel):
+    """Request to transform a single coordinate point between datums."""
+
+    source_srid: str = Field(..., description="Source coordinate reference system SRID (e.g. 'EPSG:4240')")
+    target_srid: str = Field(..., description="Target coordinate reference system SRID (e.g. 'EPSG:4326')")
+    coordinates: List[float] = Field(..., description="[longitude, latitude] or [longitude, latitude, height]")
+
+
+class CoordinateTransformPointResponse(BaseModel):
+    """Response containing datum-transformed point coordinates."""
+
+    source_srid: str
+    target_srid: str
+    transformed_coordinates: List[float]
+
+
+class CoordinateTransformBatchRequest(BaseModel):
+    """Request to batch-transform multiple coordinates between datums."""
+
+    source_srid: str = Field(..., description="Source coordinate reference system SRID")
+    target_srid: str = Field(..., description="Target coordinate reference system SRID")
+    coordinates: List[List[float]] = Field(..., description="List of [lon, lat] or [lon, lat, h] coordinates")
+
+
+class CoordinateTransformBatchResponse(BaseModel):
+    """Response containing batch-transformed coordinates."""
+
+    source_srid: str
+    target_srid: str
+    transformed_coordinates: List[List[float]]
+    count: int
+
+
+class HelmertFitGCPPair(BaseModel):
+    """3D Ground Control Point pair for Helmert parameter adjustment."""
+
+    source_xyz: List[float] = Field(..., description="Source 3D Cartesian coordinates [X, Y, Z] in metres")
+    target_xyz: List[float] = Field(..., description="Target 3D Cartesian coordinates [X, Y, Z] in metres")
+
+
+class HelmertFitRequest(BaseModel):
+    """Request to compute least-squares 7-parameter Helmert transformation from GCP pairs."""
+
+    gcps: List[HelmertFitGCPPair] = Field(..., min_length=3, description="List of at least 3 GCP pairs")
+    convention: str = Field("POSITION_VECTOR", description="Rotation sign convention ('POSITION_VECTOR' or 'COORDINATE_FRAME')")
+    is_molodensky_badekas: bool = Field(False, description="Whether to compute evaluation centroid (10-parameter model)")
+
+
+class HelmertFitResponse(BaseModel):
+    """Statistical estimation results and Helmert parameters."""
+
+    parameters: Dict[str, Any] = Field(..., description="Estimated 7-parameter Helmert values (dx, dy, dz, rx, ry, rz, scale_ppm)")
+    rmse_3d: float = Field(..., description="3D Root Mean Square Error in metres")
+    rmse_x: float = Field(..., description="X-axis Root Mean Square Error in metres")
+    rmse_y: float = Field(..., description="Y-axis Root Mean Square Error in metres")
+    rmse_z: float = Field(..., description="Z-axis Root Mean Square Error in metres")
+    num_points: int = Field(..., description="Number of GCP point pairs evaluated")
+    degrees_of_freedom: int = Field(..., description="Degrees of freedom (3N - 7)")
+    sigma_0: float = Field(..., description="Standard error of unit weight")
+    residuals: List[List[float]] = Field(..., description="Residual vector [vx, vy, vz] per GCP in metres")
+

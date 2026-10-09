@@ -122,6 +122,77 @@ KALIANPUR_1975_ZONE_IIA_REGIONAL = HelmertParameters(
     convention=HelmertConvention.POSITION_VECTOR,
 )
 
+KALIANPUR_ZONE_I_TO_WGS84 = HelmertParameters(
+    name="Kalianpur 1975 Zone I (North India) to WGS 84",
+    dx=284.0,
+    dy=736.5,
+    dz=262.0,
+    rx=0.08,
+    ry=-0.28,
+    rz=0.35,
+    scale_ppm=0.3,
+    convention=HelmertConvention.POSITION_VECTOR,
+)
+
+KALIANPUR_ZONE_IIA_TO_WGS84 = KALIANPUR_1975_ZONE_IIA_REGIONAL
+
+KALIANPUR_ZONE_IIB_TO_WGS84 = HelmertParameters(
+    name="Kalianpur 1975 Zone IIb (North-East / East India) to WGS 84",
+    dx=281.5,
+    dy=733.0,
+    dz=258.5,
+    rx=0.18,
+    ry=-0.40,
+    rz=0.55,
+    scale_ppm=0.6,
+    convention=HelmertConvention.POSITION_VECTOR,
+)
+
+KALIANPUR_ZONE_IIIA_TO_WGS84 = HelmertParameters(
+    name="Kalianpur 1975 Zone IIIa (Peninsular West) to WGS 84",
+    dx=285.2,
+    dy=737.1,
+    dz=263.4,
+    rx=0.05,
+    ry=-0.22,
+    rz=0.30,
+    scale_ppm=0.2,
+    convention=HelmertConvention.POSITION_VECTOR,
+)
+
+KALIANPUR_ZONE_IIIB_TO_WGS84 = HelmertParameters(
+    name="Kalianpur 1975 Zone IIIb (Peninsular East) to WGS 84",
+    dx=283.0,
+    dy=735.0,
+    dz=260.5,
+    rx=0.10,
+    ry=-0.30,
+    rz=0.42,
+    scale_ppm=0.4,
+    convention=HelmertConvention.POSITION_VECTOR,
+)
+
+KALIANPUR_ZONE_IVA_TO_WGS84 = HelmertParameters(
+    name="Kalianpur 1975 Zone IVa (Deep South) to WGS 84",
+    dx=286.0,
+    dy=738.5,
+    dz=264.8,
+    rx=0.02,
+    ry=-0.15,
+    rz=0.20,
+    scale_ppm=0.1,
+    convention=HelmertConvention.POSITION_VECTOR,
+)
+
+SOI_REGIONAL_HELMERT_PRESETS: Dict[int, HelmertParameters] = {
+    24378: KALIANPUR_ZONE_I_TO_WGS84,
+    24379: KALIANPUR_ZONE_IIA_TO_WGS84,
+    24380: KALIANPUR_ZONE_IIB_TO_WGS84,
+    24381: KALIANPUR_ZONE_IIIA_TO_WGS84,
+    24382: KALIANPUR_ZONE_IIIB_TO_WGS84,
+    24383: KALIANPUR_ZONE_IVA_TO_WGS84,
+}
+
 
 class EllipsoidConversion:
     """Rigorous transformations between geodetic (lon, lat, height) and 3D Cartesian coordinates."""
@@ -479,3 +550,328 @@ class DatumPipeline:
                 )
 
         return curr_lon, curr_lat, curr_h
+
+
+@dataclass
+class HelmertFitResult:
+    """Statistical estimation result from least-squares 7-parameter Helmert fitting."""
+
+    parameters: HelmertParameters
+    rmse_3d: float
+    rmse_x: float
+    rmse_y: float
+    rmse_z: float
+    residuals: List[Tuple[float, float, float]]  # (vx, vy, vz) per point in metres
+    num_points: int
+    degrees_of_freedom: int
+    sigma_0: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "parameters": {
+                "dx": round(self.parameters.dx, 4),
+                "dy": round(self.parameters.dy, 4),
+                "dz": round(self.parameters.dz, 4),
+                "rx": round(self.parameters.rx, 4),
+                "ry": round(self.parameters.ry, 4),
+                "rz": round(self.parameters.rz, 4),
+                "scale_ppm": round(self.parameters.scale_ppm, 4),
+                "convention": self.parameters.convention.value,
+                "x0": round(self.parameters.x0, 4),
+                "y0": round(self.parameters.y0, 4),
+                "z0": round(self.parameters.z0, 4),
+            },
+            "rmse_3d": round(self.rmse_3d, 4),
+            "rmse_x": round(self.rmse_x, 4),
+            "rmse_y": round(self.rmse_y, 4),
+            "rmse_z": round(self.rmse_z, 4),
+            "num_points": self.num_points,
+            "degrees_of_freedom": self.degrees_of_freedom,
+            "sigma_0": round(self.sigma_0, 6),
+            "residuals": [
+                [round(v[0], 4), round(v[1], 4), round(v[2], 4)]
+                for v in self.residuals
+            ],
+        }
+
+
+def _solve_linear_system(A: List[List[float]], b: List[float]) -> List[float]:
+    """Solve A x = b using Gaussian elimination with partial pivoting."""
+    n = len(A)
+    M = [row[:] + [b[i]] for i, row in enumerate(A)]
+
+    for i in range(n):
+        max_row = i
+        max_val = abs(M[i][i])
+        for r in range(i + 1, n):
+            if abs(M[r][i]) > max_val:
+                max_val = abs(M[r][i])
+                max_row = r
+        if max_val < 1e-12:
+            raise TransformationError("Degenerate or ill-conditioned normal matrix in Helmert parameter adjustment.")
+
+        if max_row != i:
+            M[i], M[max_row] = M[max_row], M[i]
+
+        pivot = M[i][i]
+        for col in range(i, n + 1):
+            M[i][col] /= pivot
+
+        for r in range(n):
+            if r != i:
+                factor = M[r][i]
+                if abs(factor) > 1e-15:
+                    for col in range(i, n + 1):
+                        M[r][col] -= factor * M[i][col]
+
+    return [M[i][n] for i in range(n)]
+
+
+class HelmertFitter:
+    """Least-squares estimator for 7-parameter Helmert or Molodensky-Badekas models from Ground Control Points."""
+
+    @classmethod
+    def fit(
+        cls,
+        source_points: List[Tuple[float, float, float]],
+        target_points: List[Tuple[float, float, float]],
+        convention: HelmertConvention = HelmertConvention.POSITION_VECTOR,
+        is_molodensky_badekas: bool = False,
+    ) -> HelmertFitResult:
+        n_pts = len(source_points)
+        if n_pts != len(target_points):
+            raise TransformationError(f"Point count mismatch: {n_pts} source points vs {len(target_points)} target points.")
+        if n_pts < 3:
+            raise TransformationError(f"Minimum 3 3D GCP point pairs required for 7-parameter Helmert fitting, got {n_pts}.")
+
+        x0 = sum(p[0] for p in source_points) / n_pts
+        y0 = sum(p[1] for p in source_points) / n_pts
+        z0 = sum(p[2] for p in source_points) / n_pts
+
+        eval_x0 = x0 if is_molodensky_badekas else 0.0
+        eval_y0 = y0 if is_molodensky_badekas else 0.0
+        eval_z0 = z0 if is_molodensky_badekas else 0.0
+
+        # Sign of rotation: Position Vector (sgn = -1.0) vs Coordinate Frame (sgn = +1.0)
+        sgn = 1.0 if convention == HelmertConvention.COORDINATE_FRAME else -1.0
+
+        A: List[List[float]] = []
+        L: List[float] = []
+
+        for (xs, ys, zs), (xt, yt, zt) in zip(source_points, target_points):
+            xi = xs - eval_x0
+            yi = ys - eval_y0
+            zi = zs - eval_z0
+
+            # Row for X: dx - sgn*zi*ry + sgn*yi*rz + xi*ds = Xt - Xs
+            A.append([1.0, 0.0, 0.0, 0.0, -sgn * zi, sgn * yi, xi])
+            L.append(xt - xs)
+
+            # Row for Y: dy + sgn*zi*rx - sgn*xi*rz + yi*ds = Yt - Ys
+            A.append([0.0, 1.0, 0.0, sgn * zi, 0.0, -sgn * xi, yi])
+            L.append(yt - ys)
+
+            # Row for Z: dz - sgn*yi*rx + sgn*xi*ry + zi*ds = Zt - Zs
+            A.append([0.0, 0.0, 1.0, -sgn * yi, sgn * xi, 0.0, zi])
+            L.append(zt - zs)
+
+        m_obs = len(A)
+        N = [[0.0] * 7 for _ in range(7)]
+        U = [0.0] * 7
+
+        for row_idx in range(m_obs):
+            row = A[row_idx]
+            l_val = L[row_idx]
+            for j in range(7):
+                U[j] += row[j] * l_val
+                for k in range(j, 7):
+                    val = row[j] * row[k]
+                    N[j][k] += val
+                    if j != k:
+                        N[k][j] += val
+
+        sol = _solve_linear_system(N, U)
+
+        dx = sol[0]
+        dy = sol[1]
+        dz = sol[2]
+        rx_rad = sol[3]
+        ry_rad = sol[4]
+        rz_rad = sol[5]
+        scale_unitless = sol[6]
+
+        rx_arcsec = rx_rad * (180.0 * 3600.0 / math.pi)
+        ry_arcsec = ry_rad * (180.0 * 3600.0 / math.pi)
+        rz_arcsec = rz_rad * (180.0 * 3600.0 / math.pi)
+        scale_ppm = scale_unitless * 1e6
+
+        fitted_params = HelmertParameters(
+            name="Least-Squares Estimated Helmert Parameters",
+            dx=dx,
+            dy=dy,
+            dz=dz,
+            rx=rx_arcsec,
+            ry=ry_arcsec,
+            rz=rz_arcsec,
+            scale_ppm=scale_ppm,
+            convention=convention,
+            x0=eval_x0,
+            y0=eval_y0,
+            z0=eval_z0,
+        )
+
+        residuals: List[Tuple[float, float, float]] = []
+        sum_sq_x = 0.0
+        sum_sq_y = 0.0
+        sum_sq_z = 0.0
+
+        for sp, tp in zip(source_points, target_points):
+            trans_p = HelmertTransform.transform_cartesian(sp, fitted_params)
+            vx = tp[0] - trans_p[0]
+            vy = tp[1] - trans_p[1]
+            vz = tp[2] - trans_p[2]
+            residuals.append((vx, vy, vz))
+            sum_sq_x += vx * vx
+            sum_sq_y += vy * vy
+            sum_sq_z += vz * vz
+
+        sum_sq_3d = sum_sq_x + sum_sq_y + sum_sq_z
+        rmse_3d = math.sqrt(sum_sq_3d / n_pts)
+        rmse_x = math.sqrt(sum_sq_x / n_pts)
+        rmse_y = math.sqrt(sum_sq_y / n_pts)
+        rmse_z = math.sqrt(sum_sq_z / n_pts)
+
+        dof = max(1, 3 * n_pts - 7)
+        sigma_0 = math.sqrt(sum_sq_3d / dof)
+
+        return HelmertFitResult(
+            parameters=fitted_params,
+            rmse_3d=rmse_3d,
+            rmse_x=rmse_x,
+            rmse_y=rmse_y,
+            rmse_z=rmse_z,
+            residuals=residuals,
+            num_points=n_pts,
+            degrees_of_freedom=dof,
+            sigma_0=sigma_0,
+        )
+
+
+def get_transformation_pipeline(
+    source_srid: str,
+    target_srid: str,
+) -> Optional[DatumPipeline]:
+    """Retrieve or construct the optimal geodetic datum harmonization pipeline between two SRIDs."""
+    from backend.geodetic.registry import crs_registry
+
+    src_rec = crs_registry.get(source_srid, strict=False)
+    tgt_rec = crs_registry.get(target_srid, strict=False)
+
+    if not src_rec or not tgt_rec:
+        return None
+
+    # If same ellipsoid / datum, pipeline is identity
+    if src_rec.datum_name == tgt_rec.datum_name and src_rec.ellipsoid.name == tgt_rec.ellipsoid.name:
+        return DatumPipeline(
+            name=f"Identity pipeline ({source_srid} -> {target_srid})",
+            source_ellipsoid=src_rec.ellipsoid,
+            target_ellipsoid=tgt_rec.ellipsoid,
+            helmert_params=None,
+        )
+
+    # Kalianpur 1975 to WGS 84
+    is_src_kalianpur = "Kalianpur" in src_rec.datum_name or "Everest" in src_rec.datum_name
+    is_tgt_wgs = "WGS" in tgt_rec.datum_name or "World Geodetic System" in tgt_rec.datum_name or "WGS" in tgt_rec.name
+    if is_src_kalianpur and is_tgt_wgs:
+        helmert_p = SOI_REGIONAL_HELMERT_PRESETS.get(src_rec.epsg_code, KALIANPUR_1975_TO_WGS84_NATIONAL)
+        return DatumPipeline(
+            name=f"{src_rec.name} to {tgt_rec.name}",
+            source_ellipsoid=src_rec.ellipsoid,
+            target_ellipsoid=tgt_rec.ellipsoid,
+            helmert_params=helmert_p,
+        )
+
+    # WGS 84 to Kalianpur 1975 (Inverse)
+    is_src_wgs = "WGS" in src_rec.datum_name or "World Geodetic System" in src_rec.datum_name or "WGS" in src_rec.name
+    is_tgt_kalianpur = "Kalianpur" in tgt_rec.datum_name or "Everest" in tgt_rec.datum_name
+    if is_src_wgs and is_tgt_kalianpur:
+        helmert_p = SOI_REGIONAL_HELMERT_PRESETS.get(tgt_rec.epsg_code, KALIANPUR_1975_TO_WGS84_NATIONAL)
+        return DatumPipeline(
+            name=f"{src_rec.name} to {tgt_rec.name} (Inverse)",
+            source_ellipsoid=src_rec.ellipsoid,
+            target_ellipsoid=tgt_rec.ellipsoid,
+            helmert_params=helmert_p.to_inverse(),
+        )
+
+    # Generic fallback using National Mean
+    return DatumPipeline(
+        name=f"Generic Datum Harmonization ({src_rec.name} -> {tgt_rec.name})",
+        source_ellipsoid=src_rec.ellipsoid,
+        target_ellipsoid=tgt_rec.ellipsoid,
+        helmert_params=KALIANPUR_1975_TO_WGS84_NATIONAL,
+    )
+
+
+def transform_coordinates_batch(
+    coords: List[Tuple[float, ...]],
+    pipeline: DatumPipeline,
+    inverse: bool = False,
+) -> List[Tuple[float, ...]]:
+    """Batch transform a list of 2D (lon, lat) or 3D (lon, lat, h) coordinate tuples."""
+    results: List[Tuple[float, ...]] = []
+    for pt in coords:
+        if len(pt) == 2:
+            lon, lat = pt
+            t_lon, t_lat, _ = pipeline.transform(lon, lat, 0.0, inverse=inverse)
+            results.append((t_lon, t_lat))
+        elif len(pt) >= 3:
+            lon, lat, h = pt[0], pt[1], pt[2]
+            t_lon, t_lat, t_h = pipeline.transform(lon, lat, h, inverse=inverse)
+            results.append((t_lon, t_lat, t_h))
+        else:
+            raise TransformationError(f"Coordinate tuple must have at least 2 elements, got {pt}")
+    return results
+
+
+def transform_geojson_geometry(
+    geometry: Dict[str, Any],
+    pipeline: DatumPipeline,
+    inverse: bool = False,
+) -> Dict[str, Any]:
+    """Recursively transform coordinates of a GeoJSON geometry dictionary."""
+    geom_type = geometry.get("type")
+    coords = geometry.get("coordinates")
+
+    def _transform_point(pt: List[float]) -> List[float]:
+        h = pt[2] if len(pt) > 2 else 0.0
+        t_lon, t_lat, t_h = pipeline.transform(pt[0], pt[1], h, inverse=inverse)
+        return [t_lon, t_lat, t_h] if len(pt) > 2 else [t_lon, t_lat]
+
+    def _transform_line(line: List[List[float]]) -> List[List[float]]:
+        return [_transform_point(pt) for pt in line]
+
+    def _transform_polygon(poly: List[List[List[float]]]) -> List[List[List[float]]]:
+        return [_transform_line(ring) for ring in poly]
+
+    if geom_type == "Point":
+        new_coords = _transform_point(coords)
+    elif geom_type in ("MultiPoint", "LineString"):
+        new_coords = _transform_line(coords)
+    elif geom_type in ("MultiLineString", "Polygon"):
+        new_coords = _transform_polygon(coords)
+    elif geom_type == "MultiPolygon":
+        new_coords = [_transform_polygon(poly) for poly in coords]
+    elif geom_type == "GeometryCollection":
+        geometries = [
+            transform_geojson_geometry(g, pipeline, inverse=inverse)
+            for g in geometry.get("geometries", [])
+        ]
+        return {"type": "GeometryCollection", "geometries": geometries}
+    else:
+        raise TransformationError(f"Unsupported GeoJSON geometry type: '{geom_type}'")
+
+    return {
+        "type": geom_type,
+        "coordinates": new_coords,
+    }
+

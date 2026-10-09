@@ -170,3 +170,68 @@ class TestToposheetParsingEndpoint:
     def test_parse_toposheet_invalid(self):
         resp = client.get("/api/v1/geodetic/toposheet/INVALID_XYZ")
         assert resp.status_code == 400
+
+
+class TestDatumTransformationEndpoints:
+    """Tests for geodetic transformation API endpoints."""
+
+    def test_transform_point_endpoint(self):
+        payload = {
+            "source_srid": "EPSG:4240",  # Indian 1975
+            "target_srid": "EPSG:4326",  # WGS 84
+            "coordinates": [77.2000, 28.6000, 200.0],
+        }
+        resp = client.post("/api/v1/geodetic/transform/point", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["source_srid"] == "EPSG:4240"
+        assert data["target_srid"] == "EPSG:4326"
+        coords = data["transformed_coordinates"]
+        assert len(coords) == 3
+        assert coords[0] != 77.2000
+        assert coords[1] != 28.6000
+
+    def test_transform_batch_endpoint(self):
+        payload = {
+            "source_srid": "EPSG:4240",
+            "target_srid": "EPSG:4326",
+            "coordinates": [
+                [77.20, 28.60],
+                [72.87, 19.07],
+            ],
+        }
+        resp = client.post("/api/v1/geodetic/transform/batch", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["count"] == 2
+        assert len(data["transformed_coordinates"]) == 2
+
+    def test_fit_helmert_endpoint(self):
+        # 4 GCP pairs with pure translation (dx=100, dy=200, dz=300)
+        source_pts = [
+            [1000000.0, 2000000.0, 3000000.0],
+            [1100000.0, 2050000.0, 3050000.0],
+            [1200000.0, 2100000.0, 3100000.0],
+            [1050000.0, 2020000.0, 3020000.0],
+        ]
+        gcps = [
+            {
+                "source_xyz": sp,
+                "target_xyz": [sp[0] + 100.0, sp[1] + 200.0, sp[2] + 300.0],
+            }
+            for sp in source_pts
+        ]
+        payload = {
+            "gcps": gcps,
+            "convention": "POSITION_VECTOR",
+        }
+        resp = client.post("/api/v1/geodetic/transform/fit-helmert", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["num_points"] == 4
+        assert pytest.approx(data["rmse_3d"], abs=1e-2) == 0.0
+        p = data["parameters"]
+        assert pytest.approx(p["dx"], abs=1e-2) == 100.0
+        assert pytest.approx(p["dy"], abs=1e-2) == 200.0
+        assert pytest.approx(p["dz"], abs=1e-2) == 300.0
+

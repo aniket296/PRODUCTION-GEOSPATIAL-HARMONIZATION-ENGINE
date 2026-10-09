@@ -19,11 +19,17 @@ from backend.geodetic import (
     GridOutOfBoundsError,
     GridShiftTable,
     HelmertConvention,
+    HelmertFitResult,
+    HelmertFitter,
     HelmertParameters,
     HelmertTransform,
     KALIANPUR_1975_TO_WGS84_NATIONAL,
     KALIANPUR_1975_ZONE_IIA_REGIONAL,
+    TransformationError,
     WGS84_ELLIPSOID,
+    get_transformation_pipeline,
+    transform_coordinates_batch,
+    transform_geojson_geometry,
 )
 
 
@@ -349,3 +355,175 @@ class TestDatumPipelineExecution:
         assert pytest.approx(lon_rev, abs=1e-5) == lon_in
         assert pytest.approx(lat_rev, abs=1e-5) == lat_in
         assert pytest.approx(h_rev, abs=1e-2) == h_in
+
+
+class TestHelmertFitter:
+    """Tests for least-squares 7-parameter Helmert adjustment from GCPs."""
+
+    def test_fit_exact_synthetic_helmert(self):
+        # Known ground truth transformation
+        true_params = HelmertParameters(
+            name="Ground Truth",
+            dx=120.0,
+            dy=-85.0,
+            dz=45.0,
+            rx=1.2,
+            ry=-0.8,
+            rz=2.1,
+            scale_ppm=4.5,
+            convention=HelmertConvention.POSITION_VECTOR,
+        )
+
+        # 6 synthetic source control points around India (approx Cartesian coordinates)
+        source_pts = [
+            (1250000.0, 5800000.0, 2100000.0),
+            (1350000.0, 5700000.0, 2200000.0),
+            (1450000.0, 5900000.0, 2000000.0),
+            (1150000.0, 5600000.0, 2300000.0),
+            (1300000.0, 5750000.0, 2150000.0),
+            (1400000.0, 5650000.0, 2250000.0),
+        ]
+
+        # Generate target points using true transformation
+        target_pts = [
+            HelmertTransform.transform_cartesian(sp, true_params)
+            for sp in source_pts
+        ]
+
+        # Fit parameters
+        fit_res = HelmertFitter.fit(
+            source_pts,
+            target_pts,
+            convention=HelmertConvention.POSITION_VECTOR,
+        )
+
+        assert isinstance(fit_res, HelmertFitResult)
+        assert fit_res.num_points == 6
+        assert fit_res.degrees_of_freedom == 11
+        assert pytest.approx(fit_res.rmse_3d, abs=1e-3) == 0.0
+
+        p = fit_res.parameters
+        assert pytest.approx(p.dx, abs=1e-3) == true_params.dx
+        assert pytest.approx(p.dy, abs=1e-3) == true_params.dy
+        assert pytest.approx(p.dz, abs=1e-3) == true_params.dz
+        assert pytest.approx(p.rx, abs=1e-3) == true_params.rx
+        assert pytest.approx(p.ry, abs=1e-3) == true_params.ry
+        assert pytest.approx(p.rz, abs=1e-3) == true_params.rz
+        assert pytest.approx(p.scale_ppm, abs=1e-3) == true_params.scale_ppm
+
+    def test_fit_molodensky_badekas(self):
+        source_pts = [
+            (1000000.0, 2000000.0, 3000000.0),
+            (1050000.0, 2050000.0, 3050000.0),
+            (1100000.0, 2000000.0, 3000000.0),
+            (1000000.0, 2100000.0, 3100000.0),
+        ]
+        target_pts = [
+            (p[0] + 50.0, p[1] + 60.0, p[2] + 70.0)
+            for p in source_pts
+        ]
+
+        fit_res = HelmertFitter.fit(
+            source_pts,
+            target_pts,
+            is_molodensky_badekas=True,
+        )
+        assert fit_res.parameters.is_molodensky_badekas is True
+        assert pytest.approx(fit_res.parameters.dx, abs=1e-3) == 50.0
+        assert pytest.approx(fit_res.parameters.dy, abs=1e-3) == 60.0
+        assert pytest.approx(fit_res.parameters.dz, abs=1e-3) == 70.0
+        assert pytest.approx(fit_res.rmse_3d, abs=1e-3) == 0.0
+
+    def test_fit_validation_minimum_points(self):
+        # 2 points is less than minimum 3
+        with pytest.raises(TransformationError, match="Minimum 3"):
+            HelmertFitter.fit([(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)], [(1.0, 2.0, 3.0), (4.0, 5.0, 6.0)])
+
+    def test_fit_validation_point_mismatch(self):
+        with pytest.raises(TransformationError, match="Point count mismatch"):
+            HelmertFitter.fit([(1.0, 2.0, 3.0), (4.0, 5.0, 6.0), (7.0, 8.0, 9.0)], [(1.0, 2.0, 3.0)])
+
+
+class TestBatchAndGeoJSONTransform:
+    """Tests for vector coordinate batching and GeoJSON geometry tree traversal."""
+
+    @pytest.fixture
+    def national_pipeline(self) -> DatumPipeline:
+        return DatumPipeline(
+            name="Kalianpur to WGS84",
+            source_ellipsoid=EVEREST_1830_ELLIPSOID,
+            target_ellipsoid=WGS84_ELLIPSOID,
+            helmert_params=KALIANPUR_1975_TO_WGS84_NATIONAL,
+        )
+
+    def test_transform_coordinates_batch_2d(self, national_pipeline):
+        coords_in = [(77.20, 28.61), (72.87, 19.07), (88.36, 22.57)]
+        res = transform_coordinates_batch(coords_in, national_pipeline)
+        assert len(res) == 3
+        assert all(len(pt) == 2 for pt in res)
+        # Check non-zero transformation shift
+        assert res[0][0] != coords_in[0][0]
+        assert res[0][1] != coords_in[0][1]
+
+    def test_transform_coordinates_batch_3d(self, national_pipeline):
+        coords_in = [(77.20, 28.61, 216.0), (72.87, 19.07, 14.0)]
+        res = transform_coordinates_batch(coords_in, national_pipeline)
+        assert len(res) == 2
+        assert all(len(pt) == 3 for pt in res)
+
+    def test_transform_geojson_polygon(self, national_pipeline):
+        poly_geom = {
+            "type": "Polygon",
+            "coordinates": [
+                [
+                    [77.20, 28.60],
+                    [77.25, 28.60],
+                    [77.25, 28.65],
+                    [77.20, 28.65],
+                    [77.20, 28.60],
+                ]
+            ],
+        }
+        res = transform_geojson_geometry(poly_geom, national_pipeline)
+        assert res["type"] == "Polygon"
+        ring = res["coordinates"][0]
+        assert len(ring) == 5
+        # First and last point remain closed ring
+        assert ring[0] == ring[4]
+        assert ring[0][0] != 77.20
+
+    def test_transform_geojson_geometry_collection(self, national_pipeline):
+        geom_coll = {
+            "type": "GeometryCollection",
+            "geometries": [
+                {"type": "Point", "coordinates": [77.20, 28.60]},
+                {"type": "LineString", "coordinates": [[77.20, 28.60], [77.25, 28.65]]},
+            ],
+        }
+        res = transform_geojson_geometry(geom_coll, national_pipeline)
+        assert res["type"] == "GeometryCollection"
+        assert len(res["geometries"]) == 2
+        assert res["geometries"][0]["type"] == "Point"
+        assert res["geometries"][1]["type"] == "LineString"
+
+
+class TestPipelineLookup:
+    """Tests for automatic pipeline construction from SRIDs."""
+
+    def test_pipeline_lookup_kalianpur_to_wgs84(self):
+        pipe = get_transformation_pipeline("EPSG:4240", "EPSG:4326")
+        assert pipe is not None
+        assert "Everest" in pipe.source_ellipsoid.name
+        assert "WGS 84" in pipe.target_ellipsoid.name
+        assert pipe.helmert_params is not None
+
+    def test_pipeline_lookup_zone_iia_regional(self):
+        pipe = get_transformation_pipeline("EPSG:24379", "EPSG:4326")
+        assert pipe is not None
+        assert pipe.helmert_params.dx == KALIANPUR_1975_ZONE_IIA_REGIONAL.dx
+
+    def test_pipeline_lookup_same_srid_is_identity(self):
+        pipe = get_transformation_pipeline("EPSG:4326", "EPSG:4326")
+        assert pipe is not None
+        assert pipe.helmert_params is None
+
