@@ -160,3 +160,116 @@ class HelmertFitResponse(BaseModel):
     sigma_0: float = Field(..., description="Standard error of unit weight")
     residuals: List[List[float]] = Field(..., description="Residual vector [vx, vy, vz] per GCP in metres")
 
+
+class NormalizationConfigSchema(BaseModel):
+    """Configuration options for polygon boundary sanitization."""
+
+    snap_precision_m: float = Field(0.001, description="Grid snapping precision in metres (1 mm)")
+    collinear_tolerance_m: float = Field(0.005, description="Collinear vertex decimation tolerance in metres (5 mm)")
+    min_parcel_area_sqm: float = Field(1.0, description="Minimum allowable parcel area in square metres")
+    sliver_compactness_threshold: float = Field(0.05, description="Polsby-Popper threshold for sliver detection")
+    max_area_drift_pct: float = Field(0.05, description="Maximum allowable area change percentage (0.05%)")
+    max_hausdorff_drift_m: float = Field(0.05, description="Maximum Hausdorff boundary displacement allowed in metres (5 cm)")
+    auto_resolve_overlap_max_sqm: float = Field(5.0, description="Max overlap area eligible for automatic reconciliation")
+    shared_boundary_snap_tolerance_m: float = Field(0.05, description="Distance tolerance to snap adjacent parcel edges")
+    orient_ccw: bool = Field(True, description="Enforce exterior CCW and interior CW ring orientation")
+    force_2d: bool = Field(True, description="Strip Z/M elevation ordinates to pure planar coordinates")
+    repair_self_intersections: bool = Field(True, description="Resolve self-intersecting bow-ties and invalid rings")
+
+
+class NormalizationAuditSchema(BaseModel):
+    """Detailed audit metrics from polygon normalization."""
+
+    original_area_sqm: float
+    normalized_area_sqm: float
+    area_drift_pct: float
+    original_vertex_count: int
+    normalized_vertex_count: int
+    vertices_removed: int
+    max_displacement_m: float
+    repaired_defects: List[str]
+    is_valid_polygon: bool
+    is_multipolygon: bool
+    num_parts: int
+    num_holes: int
+
+
+class NormalizeGeometryRequest(BaseModel):
+    """Request payload to sanitize and normalize a cadastral parcel geometry."""
+
+    geometry: Dict[str, Any] = Field(..., description="GeoJSON geometry object (Polygon or MultiPolygon)")
+    config: Optional[NormalizationConfigSchema] = Field(None, description="Optional normalization configuration parameters")
+
+
+class NormalizeGeometryResponse(BaseModel):
+    """Response containing sanitized GeoJSON geometry and full normalization audit."""
+
+    success: bool = True
+    normalized_geometry: Dict[str, Any]
+    audit: NormalizationAuditSchema
+
+
+class ParcelGeometryItem(BaseModel):
+    """Item representing a single cadastral parcel with identifier and GeoJSON geometry."""
+
+    parcel_identifier: str = Field(..., description="Unique parcel identifier (e.g. 'KHASRA-101')")
+    geometry: Dict[str, Any] = Field(..., description="GeoJSON geometry dictionary")
+    khasra_number: Optional[str] = Field(None, description="Optional Khasra survey number")
+
+
+class TopologicalAnomalySchema(BaseModel):
+    """Individual detected topological anomaly."""
+
+    defect_type: str
+    severity: str
+    description: str
+    affected_parcel_ids: List[str]
+    affected_area_sqm: float
+    location: Optional[List[float]] = None
+    geometry: Optional[Dict[str, Any]] = None
+
+
+class CadastralTopologyReportSchema(BaseModel):
+    """Topological health summary report for a cadastral parcel batch."""
+
+    total_parcels: int
+    valid_parcels_count: int
+    invalid_parcels_count: int
+    is_planar_graph_valid: bool
+    total_overlap_area_sqm: float
+    total_gap_area_sqm: float
+    auto_resolvable_count: int
+    critical_dispute_count: int
+    anomalies_count: int
+    anomalies: List[TopologicalAnomalySchema]
+
+
+class ValidateTopologyBatchRequest(BaseModel):
+    """Request payload to validate planar topology across a batch of cadastral parcels."""
+
+    parcels: List[ParcelGeometryItem] = Field(..., min_length=1, description="List of cadastral parcels to validate")
+    config: Optional[NormalizationConfigSchema] = Field(None, description="Optional topology configuration parameters")
+
+
+class ValidateTopologyBatchResponse(BaseModel):
+    """Response containing comprehensive topological anomaly report."""
+
+    success: bool = True
+    report: CadastralTopologyReportSchema
+
+
+class SnapSharedBoundariesRequest(BaseModel):
+    """Request payload to snap shared boundaries between adjacent parcels."""
+
+    parcels: List[ParcelGeometryItem] = Field(..., min_length=2, description="List of parcels to align")
+    tolerance_m: float = Field(0.05, description="Snapping distance tolerance in metres (e.g. 0.05m = 5cm)")
+
+
+class SnapSharedBoundariesResponse(BaseModel):
+    """Response containing aligned parcels."""
+
+    success: bool = True
+    aligned_parcels: List[ParcelGeometryItem]
+    count: int
+
+

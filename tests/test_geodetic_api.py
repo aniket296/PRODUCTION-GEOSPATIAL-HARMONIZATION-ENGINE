@@ -235,3 +235,160 @@ class TestDatumTransformationEndpoints:
         assert pytest.approx(p["dy"], abs=1e-2) == 200.0
         assert pytest.approx(p["dz"], abs=1e-2) == 300.0
 
+
+class TestBoundaryNormalizationAndTopologyEndpoints:
+    """Tests for boundary normalization, planar topology validation, and edge snapping endpoints."""
+
+    def test_normalize_geometry_endpoint_success(self):
+        # Clockwise polygon with duplicate vertex and unclosed ring
+        payload = {
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [0.0, 0.0],
+                        [0.0, 10.0],
+                        [10.0, 10.0],
+                        [10.0, 10.0],  # Duplicate
+                        [10.0, 0.0],
+                        # Not closed
+                    ]
+                ],
+            },
+            "config": {
+                "snap_precision_m": 0.001,
+                "orient_ccw": True,
+            },
+        }
+        resp = client.post("/api/v1/geodetic/normalize/geometry", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        norm_geom = data["normalized_geometry"]
+        assert norm_geom["type"] == "Polygon"
+        # Must be closed
+        coords = norm_geom["coordinates"][0]
+        assert coords[0] == coords[-1]
+        audit = data["audit"]
+        assert audit["is_valid_polygon"] is True
+        assert audit["original_area_sqm"] == pytest.approx(100.0)
+        assert audit["normalized_area_sqm"] == pytest.approx(100.0)
+
+    def test_normalize_geometry_endpoint_bowtie_repair(self):
+        # Self-intersecting figure-8 bow-tie
+        payload = {
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0], [0.0, 0.0]]
+                ],
+            }
+        }
+        resp = client.post("/api/v1/geodetic/normalize/geometry", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["audit"]["is_valid_polygon"] is True
+        assert "INVALID_GEOMETRY" in data["audit"]["repaired_defects"]
+
+    def test_normalize_geometry_endpoint_invalid_payload(self):
+        payload = {
+            "geometry": {
+                "type": "InvalidType",
+                "coordinates": [],
+            }
+        }
+        resp = client.post("/api/v1/geodetic/normalize/geometry", json=payload)
+        assert resp.status_code in (400, 422)
+
+    def test_validate_topology_batch_endpoint_clean(self):
+        payload = {
+            "parcels": [
+                {
+                    "parcel_identifier": "P1",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [40, 0], [40, 50], [0, 50], [0, 0]]],
+                    },
+                },
+                {
+                    "parcel_identifier": "P2",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[40, 0], [90, 0], [90, 50], [40, 50], [40, 0]]],
+                    },
+                },
+            ]
+        }
+        resp = client.post("/api/v1/geodetic/topology/validate", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        rep = data["report"]
+        assert rep["total_parcels"] == 2
+        assert rep["valid_parcels_count"] == 2
+        assert rep["is_planar_graph_valid"] is True
+        assert len(rep["anomalies"]) == 0
+
+    def test_validate_topology_batch_endpoint_with_overlap(self):
+        # 0.05m overlap * 50m = 2.5 sqm
+        payload = {
+            "parcels": [
+                {
+                    "parcel_identifier": "P1",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [40.05, 0], [40.05, 50], [0, 50], [0, 0]]],
+                    },
+                },
+                {
+                    "parcel_identifier": "P2",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[40, 0], [90, 0], [90, 50], [40, 50], [40, 0]]],
+                    },
+                },
+            ]
+        }
+        resp = client.post("/api/v1/geodetic/topology/validate", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        rep = data["report"]
+        assert rep["is_planar_graph_valid"] is False
+        assert rep["total_overlap_area_sqm"] == pytest.approx(2.5, abs=1e-3)
+        assert rep["auto_resolvable_count"] == 1
+        assert len(rep["anomalies"]) == 1
+        anom = rep["anomalies"][0]
+        assert anom["defect_type"] == "OVERLAP"
+        assert anom["severity"] == "AUTO_RESOLVABLE"
+
+    def test_snap_shared_boundaries_endpoint(self):
+        payload = {
+            "parcels": [
+                {
+                    "parcel_identifier": "P1",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [40, 0], [40, 50], [0, 50], [0, 0]]],
+                    },
+                },
+                {
+                    "parcel_identifier": "P2",
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[40.02, 0], [90, 0], [90, 50], [40.02, 50], [40.02, 0]]],
+                    },
+                },
+            ],
+            "tolerance_m": 0.05,
+        }
+        resp = client.post("/api/v1/geodetic/topology/snap", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["count"] == 2
+        aligned = data["aligned_parcels"]
+        assert len(aligned) == 2
+
+

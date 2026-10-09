@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, status
+import shapely.geometry
 
 from backend.api.schemas.geodetic import (
     CRSDetailResponse,
@@ -12,6 +13,7 @@ from backend.api.schemas.geodetic import (
     CRSSummaryResponse,
     CRSValidationRequest,
     CRSValidationResponse,
+    CadastralTopologyReportSchema,
     CoordinateTransformBatchRequest,
     CoordinateTransformBatchResponse,
     CoordinateTransformPointRequest,
@@ -19,15 +21,29 @@ from backend.api.schemas.geodetic import (
     HelmertFitRequest,
     HelmertFitResponse,
     LocalCadastralGridRequest,
+    NormalizationAuditSchema,
+    NormalizationConfigSchema,
+    NormalizeGeometryRequest,
+    NormalizeGeometryResponse,
+    ParcelGeometryItem,
+    SnapSharedBoundariesRequest,
+    SnapSharedBoundariesResponse,
     ToposheetResponse,
+    ValidateTopologyBatchRequest,
+    ValidateTopologyBatchResponse,
 )
 from backend.geodetic import (
     CRSNotFoundError,
     CRSOutOfBoundsError,
     CRSValidationError,
+    CadastralTopologyPreserver,
+    CadastralTopologyValidator,
+    GeometrySanitizer,
     HelmertConvention,
     HelmertFitter,
     LocalCadastralGrid,
+    NormalizationConfig,
+    NormalizationError,
     TransformationError,
     crs_registry,
     get_transformation_pipeline,
@@ -333,5 +349,116 @@ def fit_helmert_from_gcps(request: HelmertFitRequest) -> HelmertFitResponse:
         degrees_of_freedom=res_dict["degrees_of_freedom"],
         sigma_0=res_dict["sigma_0"],
         residuals=res_dict["residuals"],
+    )
+
+
+@router.post("/normalize/geometry", response_model=NormalizeGeometryResponse, status_code=status.HTTP_200_OK)
+def normalize_geometry_endpoint(request: NormalizeGeometryRequest) -> NormalizeGeometryResponse:
+    """Sanitize, repair, orient, and normalize a cadastral parcel geometry."""
+    try:
+        geom = shapely.geometry.shape(request.geometry)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid GeoJSON geometry payload: {str(e)}",
+        )
+
+    config = None
+    if request.config:
+        config = NormalizationConfig(**request.config.model_dump())
+
+    try:
+        result = GeometrySanitizer.clean_polygon(geom, config=config)
+    except NormalizationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Geometry sanitization error: {str(e)}",
+        )
+
+    audit_dict = result.audit.to_dict()
+    return NormalizeGeometryResponse(
+        success=True,
+        normalized_geometry=result.geojson,
+        audit=NormalizationAuditSchema(**audit_dict),
+    )
+
+
+@router.post("/topology/validate", response_model=ValidateTopologyBatchResponse, status_code=status.HTTP_200_OK)
+def validate_topology_batch_endpoint(request: ValidateTopologyBatchRequest) -> ValidateTopologyBatchResponse:
+    """Validate planar topology across a batch of cadastral parcels, identifying overlaps, gaps, slivers, and dangling nodes."""
+    parcels_list = []
+    for item in request.parcels:
+        try:
+            geom = shapely.geometry.shape(item.geometry)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid GeoJSON for parcel '{item.parcel_identifier}': {str(e)}",
+            )
+        parcels_list.append({
+            "parcel_identifier": item.parcel_identifier,
+            "geometry": geom,
+            "khasra_number": item.khasra_number,
+        })
+
+    config = None
+    if request.config:
+        config = NormalizationConfig(**request.config.model_dump())
+
+    report = CadastralTopologyValidator.validate_parcel_collection(
+        parcels_list,
+        geom_key="geometry",
+        id_key="parcel_identifier",
+        config=config,
+    )
+
+    report_dict = report.to_dict()
+    return ValidateTopologyBatchResponse(
+        success=True,
+        report=CadastralTopologyReportSchema(**report_dict),
+    )
+
+
+@router.post("/topology/snap", response_model=SnapSharedBoundariesResponse, status_code=status.HTTP_200_OK)
+def snap_shared_boundaries_endpoint(request: SnapSharedBoundariesRequest) -> SnapSharedBoundariesResponse:
+    """Mutually snap shared boundary edges between adjacent cadastral parcels within the specified tolerance."""
+    parcels_list = []
+    for item in request.parcels:
+        try:
+            geom = shapely.geometry.shape(item.geometry)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid GeoJSON for parcel '{item.parcel_identifier}': {str(e)}",
+            )
+        parcels_list.append({
+            "parcel_identifier": item.parcel_identifier,
+            "geometry": geom,
+            "khasra_number": item.khasra_number,
+        })
+
+    aligned = CadastralTopologyPreserver.align_shared_boundaries(
+        parcels_list,
+        geom_key="geometry",
+        id_key="parcel_identifier",
+        tolerance=request.tolerance_m,
+    )
+
+    out_parcels = []
+    for p in aligned:
+        out_parcels.append(
+            ParcelGeometryItem(
+                parcel_identifier=p["parcel_identifier"],
+                geometry=shapely.geometry.mapping(p["geometry"]),
+                khasra_number=p.get("khasra_number"),
+            )
+        )
+
+    return SnapSharedBoundariesResponse(
+        success=True,
+        aligned_parcels=out_parcels,
+        count=len(out_parcels),
     )
 

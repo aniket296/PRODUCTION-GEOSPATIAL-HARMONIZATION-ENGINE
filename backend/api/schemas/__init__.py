@@ -15,7 +15,17 @@ from backend.api.schemas.geodetic import (
     HelmertFitRequest,
     HelmertFitResponse,
     LocalCadastralGridRequest,
+    NormalizationAuditSchema,
+    NormalizationConfigSchema,
+    NormalizeGeometryRequest,
+    NormalizeGeometryResponse,
+    ParcelGeometryItem,
+    SnapSharedBoundariesRequest,
+    SnapSharedBoundariesResponse,
+    TopologicalAnomalySchema,
     ToposheetResponse,
+    ValidateTopologyBatchRequest,
+    ValidateTopologyBatchResponse,
 )
 from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
 
@@ -36,5 +46,15 @@ __all__ = [
     "LayerStatusResponse",
     "LayerUploadResponse",
     "LocalCadastralGridRequest",
+    "NormalizationAuditSchema",
+    "NormalizationConfigSchema",
+    "NormalizeGeometryRequest",
+    "NormalizeGeometryResponse",
+    "ParcelGeometryItem",
+    "SnapSharedBoundariesRequest",
+    "SnapSharedBoundariesResponse",
+    "TopologicalAnomalySchema",
     "ToposheetResponse",
+    "ValidateTopologyBatchRequest",
+    "ValidateTopologyBatchResponse",
 ]
