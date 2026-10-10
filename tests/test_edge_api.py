@@ -283,3 +283,4 @@ class TestEdgeWorkerEndpoints:
         assert data["total_active_tasks"] == 2
         assert data["total_completed_tasks"] == 8
         assert data["average_cpu_pct"] == 20.0
+

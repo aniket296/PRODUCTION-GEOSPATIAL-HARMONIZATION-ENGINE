@@ -95,3 +95,4 @@ class DeregisterWorkerResponse(BaseModel):
     success: bool
     worker_id: str
     message: str
+

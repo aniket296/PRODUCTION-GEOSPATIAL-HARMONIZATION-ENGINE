@@ -234,3 +234,4 @@ def get_cluster_health() -> ClusterHealthSummaryResponse:
     heartbeat_monitor.check_liveness()
     summary = heartbeat_monitor.get_cluster_health_summary()
     return ClusterHealthSummaryResponse(**summary)
+
