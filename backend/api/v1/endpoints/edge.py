@@ -7,24 +7,39 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from backend.api.schemas.edge import (
     ClusterHealthSummaryResponse,
+    ConflictRecordSchema,
     DeregisterWorkerResponse,
     EdgeWorkerHeartbeatRequest,
     EdgeWorkerHeartbeatResponse,
     EdgeWorkerRegisterRequest,
     EdgeWorkerResponse,
+    EntityVersionResponse,
     HardwareMetricsSchema,
+    ResolveDisputeRequest,
+    ResolveDisputeResponse,
+    SyncBatchSubmitRequest,
+    SyncBatchSubmitResponse,
+    SyncQueueItemSchema,
 )
 from backend.edge import (
+    ConflictResolutionPolicy,
     EdgeWorker,
     HardwareMetrics,
     HeartbeatPayload,
+    SyncError,
+    SyncItemStatus,
+    SyncOperationType,
+    SyncQueueItem,
     WorkerCapability,
     WorkerNotFoundError,
     WorkerRegistrationError,
     WorkerStatus,
     edge_worker_registry,
     heartbeat_monitor,
+    sync_coordinator,
 )
+from datetime import datetime
+
 
 router = APIRouter(prefix="/edge", tags=["edge"])
 
@@ -234,4 +249,137 @@ def get_cluster_health() -> ClusterHealthSummaryResponse:
     heartbeat_monitor.check_liveness()
     summary = heartbeat_monitor.get_cluster_health_summary()
     return ClusterHealthSummaryResponse(**summary)
+
+
+# ---------------------------------------------------------------------------
+# Offline Synchronization & Conflict Resolution Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/sync/batch", response_model=SyncBatchSubmitResponse, status_code=status.HTTP_200_OK)
+def submit_offline_sync_batch(request: SyncBatchSubmitRequest) -> SyncBatchSubmitResponse:
+    """Submit a batch of queued offline cadastral mutations for central reconciliation."""
+    policy_enum = None
+    if request.policy:
+        try:
+            policy_enum = ConflictResolutionPolicy(request.policy.upper())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid conflict resolution policy '{request.policy}'. Valid policies: {[p.value for p in ConflictResolutionPolicy]}",
+            )
+
+    domain_items: List[SyncQueueItem] = []
+    for item in request.items:
+        try:
+            op_enum = SyncOperationType(item.operation_type.upper())
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid sync operation type '{item.operation_type}'.",
+            )
+
+        try:
+            ts = datetime.fromisoformat(item.client_timestamp)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid ISO 8601 client_timestamp '{item.client_timestamp}'.",
+            )
+
+        status_enum = SyncItemStatus.QUEUED
+        if item.status:
+            try:
+                status_enum = SyncItemStatus(item.status.upper())
+            except ValueError:
+                status_enum = SyncItemStatus.QUEUED
+
+        domain_item = SyncQueueItem(
+            operation_id=item.operation_id,
+            worker_id=item.worker_id,
+            entity_type=item.entity_type,
+            entity_id=item.entity_id,
+            operation_type=op_enum,
+            sequence_number=item.sequence_number,
+            client_timestamp=ts,
+            base_version=item.base_version,
+            payload=item.payload,
+            checksum=item.checksum,
+            idempotency_key=item.idempotency_key,
+            status=status_enum,
+        )
+        domain_items.append(domain_item)
+
+    batch_result = sync_coordinator.reconcile_batch(domain_items, policy=policy_enum)
+
+    conflict_schemas: List[ConflictRecordSchema] = []
+    for c in batch_result.conflicts:
+        conflict_schemas.append(
+            ConflictRecordSchema(
+                conflict_id=c.conflict_id,
+                entity_id=c.entity_id,
+                operation_id=c.operation_id,
+                worker_id=c.worker_id,
+                client_version=c.client_version,
+                server_version=c.server_version,
+                policy_applied=c.policy_applied.value,
+                resolved_version=c.resolved_version,
+                is_disputed=c.is_disputed,
+                details=c.details,
+                resolved_at=c.resolved_at.isoformat(),
+            )
+        )
+
+    return SyncBatchSubmitResponse(
+        batch_id=batch_result.batch_id,
+        total_items=batch_result.total_items,
+        committed_count=batch_result.committed_count,
+        conflict_count=batch_result.conflict_count,
+        failed_count=batch_result.failed_count,
+        acknowledged_operation_ids=batch_result.acknowledged_operation_ids,
+        conflicts=conflict_schemas,
+    )
+
+
+@router.get("/sync/entity/{entity_id}", response_model=EntityVersionResponse, status_code=status.HTTP_200_OK)
+def get_entity_version(entity_id: str) -> EntityVersionResponse:
+    """Retrieve the current authoritative state and version for a cadastral entity."""
+    record = sync_coordinator.get_server_entity(entity_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Authoritative entity '{entity_id}' not found in coordinator registry.",
+        )
+
+    return EntityVersionResponse(
+        entity_id=record.entity_id,
+        version=record.version,
+        updated_at=record.updated_at.isoformat(),
+        is_disputed=record.is_disputed,
+        payload=record.payload,
+    )
+
+
+@router.post("/sync/disputes/{entity_id}/resolve", response_model=ResolveDisputeResponse, status_code=status.HTTP_200_OK)
+def resolve_disputed_entity(entity_id: str, request: ResolveDisputeRequest) -> ResolveDisputeResponse:
+    """Manually resolve an escalated dispute on a cadastral entity."""
+    try:
+        updated_record = sync_coordinator.resolve_manual_dispute(
+            entity_id=entity_id,
+            resolved_payload=request.resolved_payload,
+            resolution_method=request.resolution_method,
+            resolved_by=request.resolved_by,
+        )
+    except SyncError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    return ResolveDisputeResponse(
+        success=True,
+        entity_id=updated_record.entity_id,
+        new_version=updated_record.version,
+        is_disputed=updated_record.is_disputed,
+        resolved_by=request.resolved_by,
+        resolution_method=request.resolution_method,
+        updated_at=updated_record.updated_at.isoformat(),
+    )
+
 

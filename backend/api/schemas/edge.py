@@ -96,3 +96,90 @@ class DeregisterWorkerResponse(BaseModel):
     worker_id: str
     message: str
 
+
+class SyncQueueItemSchema(BaseModel):
+    """Single cadastral mutation item submitted in an offline sync batch."""
+
+    operation_id: str = Field(..., description="Unique UUID for mutation operation")
+    worker_id: str = Field(..., description="Worker node ID originating mutation")
+    entity_type: str = Field("PARCEL", description="Entity type, e.g. PARCEL")
+    entity_id: str = Field(..., description="Target entity ID, e.g. KHASRA-101")
+    operation_type: str = Field("UPDATE_PARCEL", description="Mutation type")
+    sequence_number: int = Field(..., ge=1, description="Monotonic sequence number on worker queue")
+    client_timestamp: str = Field(..., description="ISO 8601 timestamp when mutation was recorded")
+    base_version: int = Field(..., ge=0, description="Version of entity on worker when edit started")
+    payload: Dict[str, Any] = Field(..., description="Mutation payload")
+    checksum: str = Field(..., description="SHA-256 checksum of payload")
+    idempotency_key: str = Field(..., description="Idempotency key")
+    status: Optional[str] = Field("QUEUED", description="Queue status")
+
+
+class SyncBatchSubmitRequest(BaseModel):
+    """Batch of offline mutations submitted by an edge worker."""
+
+    worker_id: str = Field(..., description="Originating edge worker ID")
+    items: List[SyncQueueItemSchema] = Field(..., min_length=1, description="List of queued sync items")
+    policy: Optional[str] = Field(
+        None,
+        description="Optional conflict resolution policy override (LAST_WRITE_WINS, COORDINATOR_WINS, EDGE_WINS, MANUAL_DISPUTE)",
+    )
+
+
+class ConflictRecordSchema(BaseModel):
+    """Audit schema for a resolved or escalated conflict."""
+
+    conflict_id: str
+    entity_id: str
+    operation_id: str
+    worker_id: str
+    client_version: int
+    server_version: int
+    policy_applied: str
+    resolved_version: int
+    is_disputed: bool
+    details: str
+    resolved_at: str
+
+
+class SyncBatchSubmitResponse(BaseModel):
+    """Coordinator acknowledgment and conflict report for submitted sync batch."""
+
+    batch_id: str
+    total_items: int
+    committed_count: int
+    conflict_count: int
+    failed_count: int
+    acknowledged_operation_ids: List[str]
+    conflicts: List[ConflictRecordSchema]
+
+
+class EntityVersionResponse(BaseModel):
+    """Current server version and state for an authoritative entity."""
+
+    entity_id: str
+    version: int
+    updated_at: str
+    is_disputed: bool
+    payload: Dict[str, Any]
+
+
+class ResolveDisputeRequest(BaseModel):
+    """Payload to manually arbitrate and resolve a disputed parcel."""
+
+    resolved_payload: Dict[str, Any] = Field(..., description="Final authoritative cadastral payload")
+    resolution_method: str = Field("TEHSILDAR_SIGN_OFF", description="Administrative resolution method")
+    resolved_by: str = Field(..., min_length=1, description="Officer ID or designation arbitrating dispute")
+
+
+class ResolveDisputeResponse(BaseModel):
+    """Response returned upon resolving a disputed cadastral entity."""
+
+    success: bool = True
+    entity_id: str
+    new_version: int
+    is_disputed: bool
+    resolved_by: str
+    resolution_method: str
+    updated_at: str
+
+

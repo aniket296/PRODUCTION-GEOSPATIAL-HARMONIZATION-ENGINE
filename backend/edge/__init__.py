@@ -33,6 +33,7 @@ from backend.edge.sync import (
     SyncQueueItem,
     SyncCoordinator,
     compute_payload_checksum,
+    sync_coordinator,
 )
 
 __all__ = [
@@ -62,5 +63,6 @@ __all__ = [
     "compute_payload_checksum",
     "edge_worker_registry",
     "heartbeat_monitor",
+    "sync_coordinator",
 ]
 

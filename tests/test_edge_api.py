@@ -6,17 +6,19 @@ import pytest
 from starlette.testclient import TestClient
 
 from backend.api.app import app
-from backend.edge import edge_worker_registry
+from backend.edge import edge_worker_registry, sync_coordinator
 
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
 def clean_edge_registry():
-    """Ensure clean registry before and after every API test."""
+    """Ensure clean registry and sync coordinator before and after every API test."""
     edge_worker_registry.clear()
+    sync_coordinator.clear()
     yield
     edge_worker_registry.clear()
+    sync_coordinator.clear()
 
 
 class TestEdgeWorkerEndpoints:
@@ -283,4 +285,225 @@ class TestEdgeWorkerEndpoints:
         assert data["total_active_tasks"] == 2
         assert data["total_completed_tasks"] == 8
         assert data["average_cpu_pct"] == 20.0
+
+
+class TestOfflineSyncEndpoints:
+    """Tests for offline sync batch submission, conflict resolution, and dispute escalation."""
+
+    def test_sync_batch_clean_commit(self):
+        from backend.edge.sync import compute_payload_checksum
+        from datetime import datetime, timezone
+
+        p1 = {"parcel_id": "P-101", "area_sqm": 2400.0, "owner": "Farmer A"}
+        p2 = {"parcel_id": "P-102", "area_sqm": 1850.0, "owner": "Farmer B"}
+        ts = datetime.now(timezone.utc).isoformat()
+
+        batch_payload = {
+            "worker_id": "w-pune-sync",
+            "items": [
+                {
+                    "operation_id": "op-1",
+                    "worker_id": "w-pune-sync",
+                    "entity_type": "PARCEL",
+                    "entity_id": "P-101",
+                    "operation_type": "INSERT_PARCEL",
+                    "sequence_number": 1,
+                    "client_timestamp": ts,
+                    "base_version": 0,
+                    "payload": p1,
+                    "checksum": compute_payload_checksum(p1),
+                    "idempotency_key": "w-pune-sync:P-101:1",
+                },
+                {
+                    "operation_id": "op-2",
+                    "worker_id": "w-pune-sync",
+                    "entity_type": "PARCEL",
+                    "entity_id": "P-102",
+                    "operation_type": "INSERT_PARCEL",
+                    "sequence_number": 2,
+                    "client_timestamp": ts,
+                    "base_version": 0,
+                    "payload": p2,
+                    "checksum": compute_payload_checksum(p2),
+                    "idempotency_key": "w-pune-sync:P-102:2",
+                },
+            ],
+        }
+
+        resp = client.post("/api/v1/edge/sync/batch", json=batch_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_items"] == 2
+        assert data["committed_count"] == 2
+        assert data["conflict_count"] == 0
+        assert data["failed_count"] == 0
+        assert "op-1" in data["acknowledged_operation_ids"]
+        assert "op-2" in data["acknowledged_operation_ids"]
+
+        # Verify get entity version
+        v_resp = client.get("/api/v1/edge/sync/entity/P-101")
+        assert v_resp.status_code == 200
+        v_data = v_resp.json()
+        assert v_data["entity_id"] == "P-101"
+        assert v_data["version"] == 1
+        assert v_data["payload"]["area_sqm"] == 2400.0
+
+    def test_sync_batch_conflict_resolution_edge_wins(self):
+        from backend.edge.sync import compute_payload_checksum
+        from datetime import datetime, timezone
+
+        # Seed server entity at version 5
+        sync_coordinator.set_server_entity(
+            entity_id="P-200",
+            version=5,
+            payload={"parcel_id": "P-200", "area_sqm": 1000.0},
+        )
+
+        p_edge = {"parcel_id": "P-200", "area_sqm": 1250.0, "source": "field_gnss"}
+        ts = datetime.now(timezone.utc).isoformat()
+
+        batch_payload = {
+            "worker_id": "w-edge-gps",
+            "policy": "EDGE_WINS",
+            "items": [
+                {
+                    "operation_id": "op-edge-win",
+                    "worker_id": "w-edge-gps",
+                    "entity_type": "PARCEL",
+                    "entity_id": "P-200",
+                    "operation_type": "UPDATE_PARCEL",
+                    "sequence_number": 1,
+                    "client_timestamp": ts,
+                    "base_version": 2,  # Drifted from server version 5
+                    "payload": p_edge,
+                    "checksum": compute_payload_checksum(p_edge),
+                    "idempotency_key": "w-edge-gps:P-200:1",
+                }
+            ],
+        }
+
+        resp = client.post("/api/v1/edge/sync/batch", json=batch_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["conflict_count"] == 1
+        assert len(data["conflicts"]) == 1
+        conf = data["conflicts"][0]
+        assert conf["policy_applied"] == "EDGE_WINS"
+        assert conf["resolved_version"] == 6
+        assert conf["is_disputed"] is False
+
+        # Verify coordinator state was updated
+        server_rec = sync_coordinator.get_server_entity("P-200")
+        assert server_rec.version == 6
+        assert server_rec.payload["area_sqm"] == 1250.0
+
+    def test_sync_batch_conflict_resolution_manual_dispute(self):
+        from backend.edge.sync import compute_payload_checksum
+        from datetime import datetime, timezone
+
+        # Seed server entity
+        sync_coordinator.set_server_entity(
+            entity_id="DISPUTED-PARCEL-1",
+            version=4,
+            payload={"parcel_id": "DISPUTED-PARCEL-1", "area_sqm": 500.0},
+        )
+
+        client_p = {"parcel_id": "DISPUTED-PARCEL-1", "area_sqm": 900.0}
+        ts = datetime.now(timezone.utc).isoformat()
+
+        batch_payload = {
+            "worker_id": "w-field-surveyor",
+            "policy": "MANUAL_DISPUTE",
+            "items": [
+                {
+                    "operation_id": "op-disp-1",
+                    "worker_id": "w-field-surveyor",
+                    "entity_type": "PARCEL",
+                    "entity_id": "DISPUTED-PARCEL-1",
+                    "operation_type": "UPDATE_PARCEL",
+                    "sequence_number": 1,
+                    "client_timestamp": ts,
+                    "base_version": 2,
+                    "payload": client_p,
+                    "checksum": compute_payload_checksum(client_p),
+                    "idempotency_key": "w-field-surveyor:DISPUTED-PARCEL-1:1",
+                }
+            ],
+        }
+
+        resp = client.post("/api/v1/edge/sync/batch", json=batch_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["conflict_count"] == 1
+        conf = data["conflicts"][0]
+        assert conf["is_disputed"] is True
+        assert conf["policy_applied"] == "MANUAL_DISPUTE"
+
+        # Check entity version lookup shows disputed flag
+        v_resp = client.get("/api/v1/edge/sync/entity/DISPUTED-PARCEL-1")
+        assert v_resp.status_code == 200
+        assert v_resp.json()["is_disputed"] is True
+        assert v_resp.json()["payload"]["dispute_locked"] is True
+
+        # Now resolve the dispute
+        resolve_payload = {
+            "resolved_payload": {"parcel_id": "DISPUTED-PARCEL-1", "area_sqm": 700.0, "notes": "Tehsildar joint measurement"},
+            "resolution_method": "TEHSILDAR_SIGN_OFF",
+            "resolved_by": "OFFICER-SHINDE-01",
+        }
+        res_resp = client.post("/api/v1/edge/sync/disputes/DISPUTED-PARCEL-1/resolve", json=resolve_payload)
+        assert res_resp.status_code == 200
+        res_data = res_resp.json()
+        assert res_data["success"] is True
+        assert res_data["is_disputed"] is False
+        assert res_data["new_version"] == 5
+
+        # Check entity is no longer disputed
+        v_after = client.get("/api/v1/edge/sync/entity/DISPUTED-PARCEL-1").json()
+        assert v_after["is_disputed"] is False
+        assert v_after["payload"]["area_sqm"] == 700.0
+
+    def test_sync_batch_checksum_failure(self):
+        from datetime import datetime, timezone
+
+        p = {"parcel_id": "P-TAMPER", "val": 1}
+        ts = datetime.now(timezone.utc).isoformat()
+
+        batch_payload = {
+            "worker_id": "w-tamper",
+            "items": [
+                {
+                    "operation_id": "op-tamper",
+                    "worker_id": "w-tamper",
+                    "entity_type": "PARCEL",
+                    "entity_id": "P-TAMPER",
+                    "operation_type": "INSERT_PARCEL",
+                    "sequence_number": 1,
+                    "client_timestamp": ts,
+                    "base_version": 0,
+                    "payload": p,
+                    "checksum": "corrupted_checksum_hex",
+                    "idempotency_key": "w-tamper:P-TAMPER:1",
+                }
+            ],
+        }
+
+        resp = client.post("/api/v1/edge/sync/batch", json=batch_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["failed_count"] == 1
+        assert data["committed_count"] == 0
+        assert len(data["acknowledged_operation_ids"]) == 0
+
+    def test_get_entity_not_found(self):
+        resp = client.get("/api/v1/edge/sync/entity/NONEXISTENT-ENTITY")
+        assert resp.status_code == 404
+
+    def test_resolve_dispute_not_found(self):
+        resp = client.post(
+            "/api/v1/edge/sync/disputes/NONEXISTENT/resolve",
+            json={"resolved_payload": {"k": "v"}, "resolved_by": "OFFICER"},
+        )
+        assert resp.status_code == 404
+
 

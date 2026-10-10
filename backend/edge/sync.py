@@ -483,3 +483,36 @@ class SyncCoordinator:
             is_disputed=is_disputed,
             details=details,
         )
+
+    def resolve_manual_dispute(
+        self,
+        entity_id: str,
+        resolved_payload: Dict[str, Any],
+        resolution_method: str = "TEHSILDAR_SIGN_OFF",
+        resolved_by: str = "OFFICER",
+    ) -> ServerEntityRecord:
+        """Manually resolve an escalated dispute on an entity, unlocking dispute flag."""
+        with self._lock:
+            server_rec = self._server_store.get(entity_id)
+            if not server_rec:
+                raise SyncError(f"Entity '{entity_id}' not found for dispute resolution.")
+
+            server_rec.version += 1
+            server_rec.payload = copy.deepcopy(resolved_payload)
+            server_rec.payload["dispute_locked"] = False
+            server_rec.payload["resolution_method"] = resolution_method
+            server_rec.payload["resolved_by"] = resolved_by
+            server_rec.is_disputed = False
+            server_rec.updated_at = datetime.now(timezone.utc)
+            return server_rec
+
+    def clear(self) -> None:
+        """Clear all stored entities and processed idempotency keys (for testing)."""
+        with self._lock:
+            self._server_store.clear()
+            self._processed_idempotency_keys.clear()
+
+
+# Global default sync coordinator instance
+sync_coordinator = SyncCoordinator()
+
