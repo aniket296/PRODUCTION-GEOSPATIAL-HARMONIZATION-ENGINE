@@ -140,3 +140,4 @@ class HeartbeatPayload:
             "metrics": self.metrics.to_dict() if self.metrics else None,
             "active_task_ids": list(self.active_task_ids),
         }
+

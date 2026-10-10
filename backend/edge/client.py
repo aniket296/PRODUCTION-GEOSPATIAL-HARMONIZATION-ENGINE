@@ -63,3 +63,4 @@ class EdgeHeartbeatClient:
         )
         self.registry.record_heartbeat(self.worker_id, payload)
         return payload
+

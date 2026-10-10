@@ -608,3 +608,4 @@ class TestEdgeHeartbeatClient:
         assert refreshed.status == WorkerStatus.BUSY
         assert refreshed.metrics is not None
         assert refreshed.metrics.cpu_usage_pct == 18.5
+

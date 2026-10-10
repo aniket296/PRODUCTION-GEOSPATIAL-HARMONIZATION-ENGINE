@@ -147,3 +147,4 @@ class HeartbeatMonitor:
 
 # Global default monitor instance
 heartbeat_monitor = HeartbeatMonitor()
+

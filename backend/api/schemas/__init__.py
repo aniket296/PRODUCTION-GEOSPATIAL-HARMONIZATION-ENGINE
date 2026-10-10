@@ -1,5 +1,12 @@
-"""API schemas package."""
-
+from backend.api.schemas.edge import (
+    ClusterHealthSummaryResponse,
+    DeregisterWorkerResponse,
+    EdgeWorkerHeartbeatRequest,
+    EdgeWorkerHeartbeatResponse,
+    EdgeWorkerRegisterRequest,
+    EdgeWorkerResponse,
+    HardwareMetricsSchema,
+)
 from backend.api.schemas.geodetic import (
     CRSDetailResponse,
     CRSSuggestionRequest,
@@ -36,10 +43,17 @@ __all__ = [
     "CRSSummaryResponse",
     "CRSValidationRequest",
     "CRSValidationResponse",
+    "ClusterHealthSummaryResponse",
     "CoordinateTransformBatchRequest",
     "CoordinateTransformBatchResponse",
     "CoordinateTransformPointRequest",
     "CoordinateTransformPointResponse",
+    "DeregisterWorkerResponse",
+    "EdgeWorkerHeartbeatRequest",
+    "EdgeWorkerHeartbeatResponse",
+    "EdgeWorkerRegisterRequest",
+    "EdgeWorkerResponse",
+    "HardwareMetricsSchema",
     "HelmertFitGCPPair",
     "HelmertFitRequest",
     "HelmertFitResponse",
