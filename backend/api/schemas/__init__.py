@@ -1,6 +1,9 @@
 from backend.api.schemas.edge import (
     ClusterHealthSummaryResponse,
     ConflictRecordSchema,
+    DeltaChunkSchema,
+    DeltaTransmissionSubmitRequest,
+    DeltaTransmissionSubmitResponse,
     DeregisterWorkerResponse,
     EdgeWorkerHeartbeatRequest,
     EdgeWorkerHeartbeatResponse,
@@ -56,7 +59,11 @@ __all__ = [
     "CoordinateTransformBatchResponse",
     "CoordinateTransformPointRequest",
     "CoordinateTransformPointResponse",
+    "DeltaChunkSchema",
+    "DeltaTransmissionSubmitRequest",
+    "DeltaTransmissionSubmitResponse",
     "DeregisterWorkerResponse",
+
     "EdgeWorkerHeartbeatRequest",
     "EdgeWorkerHeartbeatResponse",
     "EdgeWorkerRegisterRequest",

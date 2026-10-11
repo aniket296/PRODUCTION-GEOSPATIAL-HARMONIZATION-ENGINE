@@ -183,3 +183,40 @@ class ResolveDisputeResponse(BaseModel):
     updated_at: str
 
 
+class DeltaChunkSchema(BaseModel):
+    """Payload schema for an individual delta transmission chunk."""
+
+    delta_id: str = Field(..., description="Unique identifier for the delta session")
+    chunk_index: int = Field(..., ge=0, description="0-indexed sequence position of the chunk")
+    total_chunks: int = Field(..., ge=1, description="Total expected chunks for complete payload")
+    chunk_data_b64: str = Field(..., description="Base64-encoded binary chunk content")
+    checksum: str = Field(..., description="SHA-256 hex digest of the chunk binary data")
+
+
+class DeltaTransmissionSubmitRequest(BaseModel):
+    """Request payload containing a chunked compressed delta from an edge worker."""
+
+    worker_id: str = Field(..., description="Edge worker originating the transmission")
+    delta_id: str = Field(..., description="Session identifier for the delta")
+    compression: str = Field("GZIP", description="Compression codec used (GZIP, ZLIB, NONE)")
+    network_tier: Optional[str] = Field("3G", description="Network tier for transmission profile (2G, 3G, 4G)")
+    chunks: List[DeltaChunkSchema] = Field(..., min_length=1, description="List of delta chunks")
+
+
+class DeltaTransmissionSubmitResponse(BaseModel):
+    """Coordinator acknowledgment and application report for submitted delta transmission."""
+
+    success: bool = True
+    delta_id: str
+    total_chunks_received: int
+    uncompressed_bytes: int
+    compressed_bytes: int
+    compression_ratio: float
+    total_entities_affected: int
+    added_count: int
+    modified_count: int
+    deleted_count: int
+    applied_at: str
+
+
+

@@ -507,3 +507,104 @@ class TestOfflineSyncEndpoints:
         assert resp.status_code == 404
 
 
+class TestDeltaTransmissionEndpoints:
+    """Tests for chunked, compressed delta transmission API endpoints."""
+
+    def test_delta_transmission_api_roundtrip(self):
+        import base64
+        from backend.edge.delta import (
+            DeltaCompressionType,
+            DeltaSyncEngine,
+            NetworkTier,
+        )
+
+        base_state = {
+            "PARCEL-1": {"owner": "Ram", "area": 1000.0},
+            "PARCEL-2": {"owner": "Shyam", "area": 2000.0},
+        }
+        current_state = {
+            "PARCEL-1": {"owner": "Ram Kumar", "area": 1050.0},  # modified
+            "PARCEL-3": {"owner": "Gita", "area": 1500.0},        # added (PARCEL-2 deleted)
+        }
+
+        # Seed initial state in coordinator
+        for pid, pdata in base_state.items():
+            sync_coordinator.set_server_entity(pid, version=1, payload=pdata)
+
+        engine = DeltaSyncEngine(
+            worker_id="w-pune-delta",
+            network_tier=NetworkTier.TIER_3G,
+            compression=DeltaCompressionType.GZIP,
+            chunk_size_bytes=64,
+        )
+
+        package = engine.prepare_sync_package(base_state, current_state)
+        assert package.total_chunks > 0
+
+        # Encode chunks to base64 schemas
+        chunk_schemas = []
+        for ch in package.chunks:
+            chunk_schemas.append(
+                {
+                    "delta_id": ch.delta_id,
+                    "chunk_index": ch.chunk_index,
+                    "total_chunks": ch.total_chunks,
+                    "chunk_data_b64": base64.b64encode(ch.chunk_data).decode("ascii"),
+                    "checksum": ch.checksum,
+                }
+            )
+
+        submit_payload = {
+            "worker_id": "w-pune-delta",
+            "delta_id": package.delta_id,
+            "compression": "GZIP",
+            "network_tier": "3G",
+            "chunks": chunk_schemas,
+        }
+
+        resp = client.post("/api/v1/edge/delta/transmit", json=submit_payload)
+        assert resp.status_code == 200
+        res_data = resp.json()
+        assert res_data["success"] is True
+        assert res_data["delta_id"] == package.delta_id
+        assert res_data["total_entities_affected"] == 3
+        assert res_data["added_count"] == 1
+        assert res_data["modified_count"] == 1
+        assert res_data["deleted_count"] == 1
+
+        # Verify server state reflects delta
+        p1 = sync_coordinator.get_server_entity("PARCEL-1")
+        assert p1 is not None
+        assert p1.payload["owner"] == "Ram Kumar"
+        assert p1.version == 2
+
+        p3 = sync_coordinator.get_server_entity("PARCEL-3")
+        assert p3 is not None
+        assert p3.payload["owner"] == "Gita"
+
+        assert sync_coordinator.get_server_entity("PARCEL-2") is None
+
+    def test_delta_transmission_corrupted_chunk_rejected(self):
+        import base64
+
+        chunk_schemas = [
+            {
+                "delta_id": "delta-fail",
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "chunk_data_b64": base64.b64encode(b"bad-data").decode("ascii"),
+                "checksum": "wrong_checksum_hex",
+            }
+        ]
+        submit_payload = {
+            "worker_id": "w-fail",
+            "delta_id": "delta-fail",
+            "compression": "GZIP",
+            "chunks": chunk_schemas,
+        }
+        resp = client.post("/api/v1/edge/delta/transmit", json=submit_payload)
+        assert resp.status_code == 400
+        assert "Checksum verification failed" in resp.json()["detail"]
+
+
+

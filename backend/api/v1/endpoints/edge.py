@@ -8,6 +8,9 @@ from fastapi import APIRouter, HTTPException, Query, status
 from backend.api.schemas.edge import (
     ClusterHealthSummaryResponse,
     ConflictRecordSchema,
+    DeltaChunkSchema,
+    DeltaTransmissionSubmitRequest,
+    DeltaTransmissionSubmitResponse,
     DeregisterWorkerResponse,
     EdgeWorkerHeartbeatRequest,
     EdgeWorkerHeartbeatResponse,
@@ -22,10 +25,18 @@ from backend.api.schemas.edge import (
     SyncQueueItemSchema,
 )
 from backend.edge import (
+    BandwidthThrottler,
+    CadastralDelta,
     ConflictResolutionPolicy,
+    DeltaChunk,
+    DeltaChunkManager,
+    DeltaCompressionType,
+    DeltaCompressor,
+    DeltaSyncEngine,
     EdgeWorker,
     HardwareMetrics,
     HeartbeatPayload,
+    NetworkTier,
     SyncError,
     SyncItemStatus,
     SyncOperationType,
@@ -38,7 +49,10 @@ from backend.edge import (
     heartbeat_monitor,
     sync_coordinator,
 )
-from datetime import datetime
+import base64
+from datetime import datetime, timezone
+
+
 
 
 router = APIRouter(prefix="/edge", tags=["edge"])
@@ -381,5 +395,106 @@ def resolve_disputed_entity(entity_id: str, request: ResolveDisputeRequest) -> R
         resolution_method=request.resolution_method,
         updated_at=updated_record.updated_at.isoformat(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Compressed Delta Transmission Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/delta/transmit", response_model=DeltaTransmissionSubmitResponse, status_code=status.HTTP_200_OK)
+def submit_delta_transmission(request: DeltaTransmissionSubmitRequest) -> DeltaTransmissionSubmitResponse:
+    """Submit chunked, compressed cadastral delta for central reassembly and application."""
+    # 1. Parse compression type
+    try:
+        comp_type = DeltaCompressionType(request.compression.upper())
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported compression codec '{request.compression}'. Valid options: {[c.value for c in DeltaCompressionType]}",
+        )
+
+    # 2. Parse and validate chunks
+    domain_chunks: List[DeltaChunk] = []
+    for ch_schema in request.chunks:
+        try:
+            chunk_raw = base64.b64decode(ch_schema.chunk_data_b64)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid base64 encoding in chunk index {ch_schema.chunk_index}.",
+            )
+
+        chunk_obj = DeltaChunk(
+            delta_id=ch_schema.delta_id,
+            chunk_index=ch_schema.chunk_index,
+            total_chunks=ch_schema.total_chunks,
+            chunk_data=chunk_raw,
+            checksum=ch_schema.checksum,
+        )
+
+        if not chunk_obj.verify_checksum():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Checksum verification failed for chunk index {ch_schema.chunk_index}.",
+            )
+        domain_chunks.append(chunk_obj)
+
+    # 3. Reassemble chunks
+    chunk_manager = DeltaChunkManager()
+    try:
+        compressed_bytes = chunk_manager.reassemble(domain_chunks)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    # 4. Decompress delta
+    compressor = DeltaCompressor(compression_type=comp_type)
+    try:
+        delta = compressor.decompress(compressed_bytes)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to decompress delta payload: {e}",
+        )
+
+    # 5. Apply delta mutations directly to central store
+    for add_rec in delta.added:
+        if add_rec.new_data:
+            sync_coordinator.set_server_entity(
+                entity_id=add_rec.entity_id,
+                version=1,
+                payload=add_rec.new_data,
+            )
+
+    for mod_rec in delta.modified:
+        if mod_rec.new_data:
+            existing = sync_coordinator.get_server_entity(mod_rec.entity_id)
+            current_v = existing.version if existing else 1
+            sync_coordinator.set_server_entity(
+                entity_id=mod_rec.entity_id,
+                version=current_v + 1,
+                payload=mod_rec.new_data,
+            )
+
+    for del_rec in delta.deleted:
+        with sync_coordinator._lock:
+            sync_coordinator._server_store.pop(del_rec.entity_id, None)
+
+    orig_size = compressor.get_last_stats().get("original_bytes", len(compressed_bytes))
+    ratio = (orig_size / len(compressed_bytes)) if len(compressed_bytes) > 0 else 1.0
+
+    return DeltaTransmissionSubmitResponse(
+        success=True,
+        delta_id=delta.delta_id,
+        total_chunks_received=len(domain_chunks),
+        uncompressed_bytes=orig_size,
+        compressed_bytes=len(compressed_bytes),
+        compression_ratio=ratio,
+        total_entities_affected=delta.total_changes,
+        added_count=len(delta.added),
+        modified_count=len(delta.modified),
+        deleted_count=len(delta.deleted),
+        applied_at=datetime.now(timezone.utc).isoformat(),
+    )
+
 
 
