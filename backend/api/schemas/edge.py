@@ -219,4 +219,58 @@ class DeltaTransmissionSubmitResponse(BaseModel):
     applied_at: str
 
 
+class PeerConnectRequest(BaseModel):
+    """Payload to establish a peer link with another mesh node."""
+
+    node_id: str = Field(..., description="Target peer node identifier")
+    node_name: str = Field(..., description="Target peer node name")
+    ip_address: str = Field(..., description="Peer IP address")
+    port: int = Field(..., ge=1, le=65535, description="Peer port")
+    district: str = Field(..., description="Peer district jurisdiction")
+    shared_secret: str = Field(..., description="Authentication lease secret for mutual validation")
+
+
+class PeerDescriptorResponse(BaseModel):
+    """Descriptor summary of a connected or discovered mesh peer."""
+
+    node_id: str
+    node_name: str
+    ip_address: str
+    port: int
+    district: str
+    link_state: str
+    last_contact_at: Optional[str] = None
+
+
+class GossipBroadcastRequest(BaseModel):
+    """Payload to broadcast a local cadastral mutation across the mesh."""
+
+    entity_id: str = Field(..., description="Target parcel/cadastre entity ID")
+    payload: Dict[str, Any] = Field(..., description="Cadastral mutation payload")
+
+
+class GossipMessageResponse(BaseModel):
+    """Epidemic gossip message packet format."""
+
+    msg_id: str
+    origin_node_id: str
+    message_type: str
+    entity_id: str
+    payload: Dict[str, Any]
+    vector_clock: Dict[str, int]
+    timestamp: str
+    hops: int
+    checksum: str
+
+
+class MeshStatsResponse(BaseModel):
+    """Aggregate mesh topology and partition statistics."""
+
+    total_nodes: int
+    total_active_links: int
+    isolated_nodes_count: int
+    partitioned: bool
+
+
+
 

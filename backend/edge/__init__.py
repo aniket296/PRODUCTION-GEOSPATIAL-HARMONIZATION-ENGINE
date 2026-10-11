@@ -34,6 +34,17 @@ from backend.edge.delta import (
     ThrottledTransmissionResult,
     compute_cadastral_delta,
 )
+from backend.edge.mesh import (
+    GossipMessage,
+    GossipMessageType,
+    MeshLinkState,
+    MeshNodeStatus,
+    P2PMeshCoordinator,
+    P2PMeshNode,
+    PeerDescriptor,
+    VectorClock,
+    mesh_coordinator,
+)
 from backend.edge.sync import (
     ChecksumMismatchError,
     ConflictRecord,
@@ -67,11 +78,18 @@ __all__ = [
     "EdgeWorker",
     "EdgeWorkerError",
     "EdgeWorkerRegistry",
+    "GossipMessage",
+    "GossipMessageType",
     "HardwareMetrics",
     "HeartbeatMonitor",
     "HeartbeatPayload",
+    "MeshLinkState",
+    "MeshNodeStatus",
     "NetworkTier",
     "OfflineSyncQueue",
+    "P2PMeshCoordinator",
+    "P2PMeshNode",
+    "PeerDescriptor",
     "ServerEntityRecord",
     "SyncBatchResult",
     "SyncCoordinator",
@@ -80,6 +98,7 @@ __all__ = [
     "SyncOperationType",
     "SyncQueueItem",
     "ThrottledTransmissionResult",
+    "VectorClock",
     "WorkerCapability",
     "WorkerNotFoundError",
     "WorkerRegistrationError",
@@ -89,7 +108,9 @@ __all__ = [
     "compute_payload_checksum",
     "edge_worker_registry",
     "heartbeat_monitor",
+    "mesh_coordinator",
     "sync_coordinator",
 ]
+
 
 

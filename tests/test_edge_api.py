@@ -6,19 +6,22 @@ import pytest
 from starlette.testclient import TestClient
 
 from backend.api.app import app
-from backend.edge import edge_worker_registry, sync_coordinator
+from backend.edge import edge_worker_registry, mesh_coordinator, sync_coordinator
 
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
 def clean_edge_registry():
-    """Ensure clean registry and sync coordinator before and after every API test."""
+    """Ensure clean registry, sync coordinator, and mesh coordinator before and after every API test."""
     edge_worker_registry.clear()
     sync_coordinator.clear()
+    mesh_coordinator.clear()
     yield
     edge_worker_registry.clear()
     sync_coordinator.clear()
+    mesh_coordinator.clear()
+
 
 
 class TestEdgeWorkerEndpoints:
@@ -605,6 +608,78 @@ class TestDeltaTransmissionEndpoints:
         resp = client.post("/api/v1/edge/delta/transmit", json=submit_payload)
         assert resp.status_code == 400
         assert "Checksum verification failed" in resp.json()["detail"]
+
+
+
+class TestP2PMeshEndpoints:
+    """Tests for P2P ad-hoc mesh peer connectivity, gossip broadcasting, and mesh stats."""
+
+    def test_mesh_stats_api(self):
+        resp = client.get("/api/v1/edge/mesh/stats")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_nodes"] == 0
+        assert data["total_active_links"] == 0
+        assert data["partitioned"] is False
+
+    def test_connect_peer_and_list_peers_api(self):
+        from backend.edge.mesh import P2PMeshNode
+
+        # Register two mesh nodes
+        n1 = P2PMeshNode("node-mesh-1", "Node 1", "Pune", "192.168.1.1", 9001)
+        n2 = P2PMeshNode("node-mesh-2", "Node 2", "Pune", "192.168.1.2", 9002)
+        mesh_coordinator.register_node(n1)
+        mesh_coordinator.register_node(n2)
+
+        connect_payload = {
+            "node_id": "node-mesh-2",
+            "node_name": "Node 2",
+            "ip_address": "192.168.1.2",
+            "port": 9002,
+            "district": "Pune",
+            "shared_secret": "secret-mesh-123",
+        }
+
+        resp = client.post("/api/v1/edge/mesh/nodes/node-mesh-1/connect-peer", json=connect_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["node_id"] == "node-mesh-2"
+        assert data["link_state"] == "CONNECTED"
+
+        # List peers for node 1
+        list_resp = client.get("/api/v1/edge/mesh/nodes/node-mesh-1/peers")
+        assert list_resp.status_code == 200
+        peers = list_resp.json()
+        assert len(peers) == 1
+        assert peers[0]["node_id"] == "node-mesh-2"
+
+    def test_broadcast_gossip_mutation_api(self):
+        from backend.edge.mesh import P2PMeshNode
+
+        n1 = P2PMeshNode("node-mesh-alpha", "Node Alpha", "Pune", "192.168.1.10", 9001)
+        mesh_coordinator.register_node(n1)
+
+        broadcast_payload = {
+            "entity_id": "KHASRA-GOSSIP-1",
+            "payload": {"khasra_no": "G-1", "area_sqm": 450.0},
+        }
+
+        resp = client.post(
+            "/api/v1/edge/mesh/nodes/node-mesh-alpha/gossip/broadcast",
+            json=broadcast_payload,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["entity_id"] == "KHASRA-GOSSIP-1"
+        assert data["origin_node_id"] == "node-mesh-alpha"
+        assert data["hops"] == 0
+        assert data["msg_id"] is not None
+        assert "KHASRA-GOSSIP-1" in n1.get_local_store()
+
+    def test_mesh_node_not_found(self):
+        resp = client.get("/api/v1/edge/mesh/nodes/nonexistent-mesh-node/peers")
+        assert resp.status_code == 404
+
 
 
 

@@ -17,7 +17,12 @@ from backend.api.schemas.edge import (
     EdgeWorkerRegisterRequest,
     EdgeWorkerResponse,
     EntityVersionResponse,
+    GossipBroadcastRequest,
+    GossipMessageResponse,
     HardwareMetricsSchema,
+    MeshStatsResponse,
+    PeerConnectRequest,
+    PeerDescriptorResponse,
     ResolveDisputeRequest,
     ResolveDisputeResponse,
     SyncBatchSubmitRequest,
@@ -36,7 +41,11 @@ from backend.edge import (
     EdgeWorker,
     HardwareMetrics,
     HeartbeatPayload,
+    MeshLinkState,
+    MeshNodeStatus,
     NetworkTier,
+    P2PMeshNode,
+    PeerDescriptor,
     SyncError,
     SyncItemStatus,
     SyncOperationType,
@@ -47,10 +56,12 @@ from backend.edge import (
     WorkerStatus,
     edge_worker_registry,
     heartbeat_monitor,
+    mesh_coordinator,
     sync_coordinator,
 )
 import base64
 from datetime import datetime, timezone
+
 
 
 
@@ -495,6 +506,119 @@ def submit_delta_transmission(request: DeltaTransmissionSubmitRequest) -> DeltaT
         deleted_count=len(delta.deleted),
         applied_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# ---------------------------------------------------------------------------
+# P2P Mesh Synchronization Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/mesh/stats", response_model=MeshStatsResponse, status_code=status.HTTP_200_OK)
+def get_mesh_statistics() -> MeshStatsResponse:
+    """Retrieve ad-hoc P2P mesh topology density and partition metrics."""
+    stats = mesh_coordinator.get_mesh_stats()
+    return MeshStatsResponse(**stats)
+
+
+@router.post("/mesh/nodes/{node_id}/connect-peer", response_model=PeerDescriptorResponse, status_code=status.HTTP_200_OK)
+def connect_mesh_peer(node_id: str, request: PeerConnectRequest) -> PeerDescriptorResponse:
+    """Connect a local mesh node to a remote peer via authenticated shared secret."""
+    node = mesh_coordinator.get_node(node_id)
+    if not node:
+        # Auto-create if node exists in edge worker registry
+        worker = edge_worker_registry.get_worker(node_id)
+        if not worker:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Mesh node '{node_id}' is not registered.",
+            )
+        node = P2PMeshNode(
+            node_id=worker.worker_id,
+            node_name=worker.name,
+            district=worker.district,
+            ip_address=worker.ip_address,
+            port=worker.port,
+        )
+        mesh_coordinator.register_node(node)
+
+    desc = PeerDescriptor(
+        node_id=request.node_id,
+        node_name=request.node_name,
+        ip_address=request.ip_address,
+        port=request.port,
+        district=request.district,
+        shared_secret=request.shared_secret,
+    )
+
+    success = node.connect_peer(desc, auth_secret=request.shared_secret)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Mutual peer authentication failed for target peer '{request.node_id}'.",
+        )
+
+    updated_peer = node.get_peer(request.node_id)
+    return PeerDescriptorResponse(
+        node_id=updated_peer.node_id,
+        node_name=updated_peer.node_name,
+        ip_address=updated_peer.ip_address,
+        port=updated_peer.port,
+        district=updated_peer.district,
+        link_state=updated_peer.link_state.value,
+        last_contact_at=updated_peer.last_contact_at.isoformat() if updated_peer.last_contact_at else None,
+    )
+
+
+@router.get("/mesh/nodes/{node_id}/peers", response_model=List[PeerDescriptorResponse], status_code=status.HTTP_200_OK)
+def list_mesh_peers(node_id: str) -> List[PeerDescriptorResponse]:
+    """List peer connections and link states for a specific mesh node."""
+    node = mesh_coordinator.get_node(node_id)
+    if not node:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Mesh node '{node_id}' is not registered.",
+        )
+
+    return [
+        PeerDescriptorResponse(
+            node_id=p.node_id,
+            node_name=p.node_name,
+            ip_address=p.ip_address,
+            port=p.port,
+            district=p.district,
+            link_state=p.link_state.value,
+            last_contact_at=p.last_contact_at.isoformat() if p.last_contact_at else None,
+        )
+        for p in node.list_peers()
+    ]
+
+
+@router.post("/mesh/nodes/{node_id}/gossip/broadcast", response_model=GossipMessageResponse, status_code=status.HTTP_200_OK)
+def broadcast_gossip_mutation(node_id: str, request: GossipBroadcastRequest) -> GossipMessageResponse:
+    """Broadcast local cadastral mutation across connected mesh peers via epidemic gossip."""
+    node = mesh_coordinator.get_node(node_id)
+    if not node:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Mesh node '{node_id}' is not registered.",
+        )
+
+    msg = node.broadcast_mutation(
+        entity_id=request.entity_id,
+        payload=request.payload,
+    )
+
+    return GossipMessageResponse(
+        msg_id=msg.msg_id,
+        origin_node_id=msg.origin_node_id,
+        message_type=msg.message_type.value,
+        entity_id=msg.entity_id,
+        payload=msg.payload,
+        vector_clock=msg.vector_clock,
+        timestamp=msg.timestamp.isoformat(),
+        hops=msg.hops,
+        checksum=msg.checksum,
+    )
+
 
 
 
