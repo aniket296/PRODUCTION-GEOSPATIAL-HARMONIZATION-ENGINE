@@ -1,3 +1,10 @@
+from backend.api.schemas.ai import (
+    AlignmentHintSchema,
+    BatchBoundaryAlignmentRequest,
+    BatchBoundaryAlignmentResponse,
+    BoundaryAlignmentRequest,
+    BoundaryAlignmentResponse,
+)
 from backend.api.schemas.edge import (
     ClusterHealthSummaryResponse,
     ConflictRecordSchema,
@@ -52,6 +59,11 @@ from backend.api.schemas.geodetic import (
 from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
 
 __all__ = [
+    "AlignmentHintSchema",
+    "BatchBoundaryAlignmentRequest",
+    "BatchBoundaryAlignmentResponse",
+    "BoundaryAlignmentRequest",
+    "BoundaryAlignmentResponse",
     "CRSDetailResponse",
     "CRSSuggestionRequest",
     "CRSSuggestionResponse",
@@ -68,7 +80,6 @@ __all__ = [
     "DeltaTransmissionSubmitRequest",
     "DeltaTransmissionSubmitResponse",
     "DeregisterWorkerResponse",
-
     "EdgeWorkerHeartbeatRequest",
     "EdgeWorkerHeartbeatResponse",
     "EdgeWorkerRegisterRequest",
@@ -91,7 +102,6 @@ __all__ = [
     "ParcelGeometryItem",
     "PeerConnectRequest",
     "PeerDescriptorResponse",
-
     "ResolveDisputeRequest",
     "ResolveDisputeResponse",
     "SnapSharedBoundariesRequest",
@@ -104,3 +114,4 @@ __all__ = [
     "ValidateTopologyBatchRequest",
     "ValidateTopologyBatchResponse",
 ]
+
