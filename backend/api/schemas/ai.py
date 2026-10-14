@@ -64,3 +64,109 @@ class BatchBoundaryAlignmentResponse(BaseModel):
     average_iou: float
     average_score: float
     results: List[BoundaryAlignmentResponse]
+
+
+class DisplacementVectorSchema(BaseModel):
+    """Spatial displacement vector at a given coordinate."""
+
+    x: float = Field(..., description="X coordinate of vector anchor")
+    y: float = Field(..., description="Y coordinate of vector anchor")
+    dx: float = Field(..., description="Displacement along X axis in coordinate units")
+    dy: float = Field(..., description="Displacement along Y axis in coordinate units")
+    weight: float = Field(1.0, gt=0.0, description="Confidence / weight of the displacement")
+    magnitude: Optional[float] = Field(None, description="Euclidean displacement magnitude")
+
+
+class DeformationConfigSchema(BaseModel):
+    """Configuration parameters for elastic vector field interpolation and deformation."""
+
+    interpolation_method: str = Field("GAUSSIAN_RBF", description="IDW or GAUSSIAN_RBF")
+    max_displacement_m: float = Field(25.0, gt=0.0, description="Maximum permitted displacement before clamping")
+    rbf_epsilon: float = Field(15.0, gt=0.0, description="RBF Gaussian bandwidth parameter")
+    idw_power: float = Field(2.0, gt=0.0, description="Inverse distance weighting power")
+    preserve_topology: bool = Field(True, description="Enforce validity and topology preservation")
+    simplify_tolerance: float = Field(0.01, ge=0.0, description="Douglas-Peucker simplification tolerance")
+
+
+class DeformationAuditSchema(BaseModel):
+    """Audit report tracking structural and topological fidelity of a deformation."""
+
+    total_vertices_deformed: int
+    clamped_vertices_count: int
+    max_displacement_observed: float
+    rms_displacement: float
+    original_area_sqm: float
+    deformed_area_sqm: float
+    area_distortion_ratio: float
+    topology_preserved: bool
+
+
+class DeformPolygonRequest(BaseModel):
+    """Request to deform a parcel geometry according to supplied displacement vectors."""
+
+    parcel_id: str = Field(..., min_length=1, description="Identifier of the land parcel")
+    geojson: Dict[str, Any] = Field(..., description="GeoJSON polygon geometry")
+    displacement_vectors: List[DisplacementVectorSchema] = Field(
+        ..., min_length=1, description="List of discrete displacement vectors"
+    )
+    config: Optional[DeformationConfigSchema] = None
+
+
+class DeformPolygonResponse(BaseModel):
+    """Response containing deformed polygon geometry and deformation audit."""
+
+    parcel_id: str
+    deformed_geojson: Dict[str, Any]
+    audit: DeformationAuditSchema
+
+
+class SnapToSatelliteRequest(BaseModel):
+    """Request to automatically extract boundary displacement vectors and snap cadastre to satellite."""
+
+    parcel_id: str = Field(..., min_length=1, description="Identifier of the land parcel")
+    cadastre_geojson: Dict[str, Any] = Field(..., description="Cadastral parcel polygon GeoJSON")
+    satellite_geojson: Dict[str, Any] = Field(..., description="Detected satellite boundary polygon GeoJSON")
+    num_boundary_samples: int = Field(50, ge=10, le=500, description="Number of boundary sample points")
+    config: Optional[DeformationConfigSchema] = None
+
+
+class SnapToSatelliteResponse(BaseModel):
+    """Result of snapping cadastral boundary to satellite detection."""
+
+    parcel_id: str
+    deformed_geojson: Dict[str, Any]
+    audit: DeformationAuditSchema
+    generated_vectors_count: int
+
+
+class ClusterParcelItem(BaseModel):
+    """Parcel geometry item in a multi-parcel cluster."""
+
+    parcel_id: str = Field(..., min_length=1)
+    geojson: Dict[str, Any] = Field(..., description="GeoJSON polygon geometry")
+
+
+class DeformedParcelItem(BaseModel):
+    """Result item of deformed parcel in a cluster."""
+
+    parcel_id: str
+    deformed_geojson: Dict[str, Any]
+    audit: DeformationAuditSchema
+
+
+class DeformClusterRequest(BaseModel):
+    """Request to deform an entire cluster of adjacent parcels under a unified displacement field."""
+
+    parcels: List[ClusterParcelItem] = Field(..., min_length=1, description="List of parcels in cluster")
+    displacement_vectors: List[DisplacementVectorSchema] = Field(
+        ..., min_length=1, description="Cluster-wide displacement vectors"
+    )
+    config: Optional[DeformationConfigSchema] = None
+
+
+class DeformClusterResponse(BaseModel):
+    """Response containing deformed cluster parcels."""
+
+    total_parcels: int
+    results: List[DeformedParcelItem]
+

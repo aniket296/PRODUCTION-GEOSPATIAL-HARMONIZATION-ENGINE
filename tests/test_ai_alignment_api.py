@@ -116,3 +116,119 @@ class TestBoundaryAlignmentAPI:
         assert data["excellent_count"] >= 1
         assert len(data["results"]) == 2
         assert data["average_score"] > 0.0
+
+
+class TestDeformationAPI:
+    """Tests for POST /api/v1/ai/deformation endpoints."""
+
+    def test_deform_polygon_endpoint(self):
+        poly = {
+            "type": "Polygon",
+            "coordinates": [[[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0]]],
+        }
+        vectors = [
+            {"x": 50.0, "y": 50.0, "dx": 5.0, "dy": 5.0, "weight": 1.0},
+        ]
+        payload = {
+            "parcel_id": "DEFORM-1",
+            "geojson": poly,
+            "displacement_vectors": vectors,
+        }
+
+        resp = client.post("/api/v1/ai/deformation/deform", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parcel_id"] == "DEFORM-1"
+        assert data["deformed_geojson"]["type"] == "Polygon"
+        assert data["audit"]["total_vertices_deformed"] > 0
+        assert data["audit"]["topology_preserved"] is True
+        assert data["audit"]["rms_displacement"] > 0.0
+
+    def test_deform_polygon_clamping(self):
+        poly = {
+            "type": "Polygon",
+            "coordinates": [[[0.0, 0.0], [50.0, 0.0], [50.0, 50.0], [0.0, 50.0], [0.0, 0.0]]],
+        }
+        # Vector with 100m displacement, exceeds 10m max_displacement
+        vectors = [
+            {"x": 25.0, "y": 25.0, "dx": 100.0, "dy": 0.0, "weight": 1.0},
+        ]
+        payload = {
+            "parcel_id": "CLAMP-1",
+            "geojson": poly,
+            "displacement_vectors": vectors,
+            "config": {
+                "max_displacement_m": 10.0,
+            },
+        }
+
+        resp = client.post("/api/v1/ai/deformation/deform", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["audit"]["clamped_vertices_count"] > 0
+        assert data["audit"]["max_displacement_observed"] <= 10.01
+
+    def test_snap_to_satellite_endpoint(self):
+        cad_poly = {
+            "type": "Polygon",
+            "coordinates": [[[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0]]],
+        }
+        sat_poly = {
+            "type": "Polygon",
+            "coordinates": [[[4.0, 4.0], [104.0, 4.0], [104.0, 104.0], [4.0, 104.0], [4.0, 4.0]]],
+        }
+        payload = {
+            "parcel_id": "SNAP-1",
+            "cadastre_geojson": cad_poly,
+            "satellite_geojson": sat_poly,
+            "num_boundary_samples": 40,
+        }
+
+        resp = client.post("/api/v1/ai/deformation/snap", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parcel_id"] == "SNAP-1"
+        assert data["generated_vectors_count"] > 0
+        assert data["audit"]["topology_preserved"] is True
+        assert data["audit"]["max_displacement_observed"] > 0.0
+
+    def test_deform_cluster_endpoint(self):
+        parcel_a = {
+            "type": "Polygon",
+            "coordinates": [[[0.0, 0.0], [50.0, 0.0], [50.0, 50.0], [0.0, 50.0], [0.0, 0.0]]],
+        }
+        parcel_b = {
+            "type": "Polygon",
+            "coordinates": [[[50.0, 0.0], [100.0, 0.0], [100.0, 50.0], [50.0, 50.0], [50.0, 0.0]]],
+        }
+        vectors = [
+            {"x": 25.0, "y": 25.0, "dx": 3.0, "dy": 0.0, "weight": 1.0},
+            {"x": 75.0, "y": 25.0, "dx": 3.0, "dy": 0.0, "weight": 1.0},
+        ]
+        payload = {
+            "parcels": [
+                {"parcel_id": "CLUSTER-A", "geojson": parcel_a},
+                {"parcel_id": "CLUSTER-B", "geojson": parcel_b},
+            ],
+            "displacement_vectors": vectors,
+        }
+
+        resp = client.post("/api/v1/ai/deformation/cluster", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_parcels"] == 2
+        assert len(data["results"]) == 2
+        assert data["results"][0]["parcel_id"] == "CLUSTER-A"
+        assert data["results"][1]["parcel_id"] == "CLUSTER-B"
+        assert data["results"][0]["audit"]["topology_preserved"] is True
+        assert data["results"][1]["audit"]["topology_preserved"] is True
+
+    def test_deform_invalid_input(self):
+        payload = {
+            "parcel_id": "BAD",
+            "geojson": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+            "displacement_vectors": [{"x": 0, "y": 0, "dx": 1, "dy": 1}],
+        }
+        resp = client.post("/api/v1/ai/deformation/deform", json=payload)
+        assert resp.status_code == 400
+
