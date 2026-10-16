@@ -170,3 +170,70 @@ class DeformClusterResponse(BaseModel):
     total_parcels: int
     results: List[DeformedParcelItem]
 
+
+class SuperResolutionConfigSchema(BaseModel):
+    """Configuration for satellite raster super-resolution and edge enhancement."""
+
+    scale_factor: int = Field(2, ge=1, le=8, description="Spatial upsampling scale factor")
+    sharpen_amount: float = Field(1.2, ge=0.0, le=5.0, description="Unsharp masking strength")
+    sharpen_radius: float = Field(1.0, gt=0.0, le=10.0, description="Gaussian blur sigma for unsharp mask")
+    apply_contrast_enhancement: bool = Field(True, description="Apply percentile contrast stretching")
+    lower_percentile: float = Field(2.0, ge=0.0, lt=50.0, description="Lower clipping percentile")
+    upper_percentile: float = Field(98.0, gt=50.0, le=100.0, description="Upper clipping percentile")
+    original_gsd_m: float = Field(10.0, gt=0.0, description="Original Ground Sampling Distance in meters")
+    edge_threshold: float = Field(0.15, ge=0.0, le=1.0, description="Normalized Sobel edge detection threshold")
+
+
+class SuperResolutionAuditSchema(BaseModel):
+    """Audit metrics quantifying spatial resolution and edge sharpness gains."""
+
+    original_shape: List[int]
+    enhanced_shape: List[int]
+    scale_factor: int
+    original_gsd_m: float
+    enhanced_gsd_m: float
+    initial_sharpness: float
+    enhanced_sharpness: float
+    sharpness_gain_ratio: float
+    mean_radiance_before: float
+    mean_radiance_after: float
+
+
+class SuperResolutionEnhanceRequest(BaseModel):
+    """Request to run super-resolution, contrast stretching, and edge sharpening on a raster patch."""
+
+    tile_id: str = Field(..., min_length=1, description="Identifier of the satellite raster tile")
+    raster_matrix: List[List[Any]] = Field(
+        ..., min_length=2, description="2D (H, W) or 3D (H, W, C) raster reflectance array"
+    )
+    config: Optional[SuperResolutionConfigSchema] = None
+
+
+class SuperResolutionEnhanceResponse(BaseModel):
+    """Response containing super-resolved raster patch and sharpness audit."""
+
+    tile_id: str
+    enhanced_matrix: List[List[Any]]
+    audit: SuperResolutionAuditSchema
+
+
+class BoundaryMaskExtractRequest(BaseModel):
+    """Request to enhance a low-res satellite tile and extract binary parcel boundary edge mask."""
+
+    tile_id: str = Field(..., min_length=1, description="Identifier of the satellite raster tile")
+    raster_matrix: List[List[Any]] = Field(
+        ..., min_length=2, description="2D (H, W) or 3D (H, W, C) raster reflectance array"
+    )
+    config: Optional[SuperResolutionConfigSchema] = None
+
+
+class BoundaryMaskExtractResponse(BaseModel):
+    """Response containing extracted binary boundary edge mask at super-resolved GSD."""
+
+    tile_id: str
+    boundary_mask: List[List[bool]]
+    edge_pixel_count: int
+    edge_density_ratio: float
+    enhanced_gsd_m: float
+
+

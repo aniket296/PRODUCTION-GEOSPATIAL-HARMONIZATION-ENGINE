@@ -232,3 +232,55 @@ class TestDeformationAPI:
         resp = client.post("/api/v1/ai/deformation/deform", json=payload)
         assert resp.status_code == 400
 
+
+class TestSuperResolutionAPI:
+    """Tests for POST /api/v1/ai/super-resolution endpoints."""
+
+    def test_enhance_raster_endpoint(self):
+        # 8x8 synthetic patch with step edge
+        matrix = [[0.2 if c < 4 else 0.8 for c in range(8)] for _ in range(8)]
+        payload = {
+            "tile_id": "SENTINEL2-TILE-01",
+            "raster_matrix": matrix,
+            "config": {
+                "scale_factor": 2,
+                "sharpen_amount": 1.2,
+                "apply_contrast_enhancement": True,
+                "original_gsd_m": 10.0,
+            },
+        }
+
+        resp = client.post("/api/v1/ai/super-resolution/enhance", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tile_id"] == "SENTINEL2-TILE-01"
+        assert data["audit"]["original_shape"] == [8, 8]
+        assert data["audit"]["enhanced_shape"] == [16, 16]
+        assert data["audit"]["enhanced_gsd_m"] == 5.0
+        assert data["audit"]["sharpness_gain_ratio"] > 1.0
+        assert len(data["enhanced_matrix"]) == 16
+        assert len(data["enhanced_matrix"][0]) == 16
+
+    def test_extract_boundary_mask_endpoint(self):
+        matrix = [[0.2 if r + c < 8 else 0.85 for c in range(8)] for r in range(8)]
+        payload = {
+            "tile_id": "SENTINEL2-MASK-01",
+            "raster_matrix": matrix,
+            "config": {
+                "scale_factor": 2,
+                "original_gsd_m": 10.0,
+                "edge_threshold": 0.2,
+            },
+        }
+
+        resp = client.post("/api/v1/ai/super-resolution/boundary-mask", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tile_id"] == "SENTINEL2-MASK-01"
+        assert data["edge_pixel_count"] > 0
+        assert data["edge_density_ratio"] > 0.0
+        assert data["enhanced_gsd_m"] == 5.0
+        assert len(data["boundary_mask"]) == 16
+        assert len(data["boundary_mask"][0]) == 16
+
+

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, status
+import numpy as np
 from shapely.geometry import Polygon, mapping, shape
 
 from backend.ai.alignment import BoundaryAlignmentScorer
@@ -14,12 +15,18 @@ from backend.ai.deformation import (
     ElasticDeformationEngine,
     build_displacement_field_from_pairs,
 )
+from backend.ai.super_resolution import (
+    SuperResolutionConfig,
+    SuperResolutionEngine,
+)
 from backend.api.schemas.ai import (
     AlignmentHintSchema,
     BatchBoundaryAlignmentRequest,
     BatchBoundaryAlignmentResponse,
     BoundaryAlignmentRequest,
     BoundaryAlignmentResponse,
+    BoundaryMaskExtractRequest,
+    BoundaryMaskExtractResponse,
     ClusterParcelItem,
     DeformClusterRequest,
     DeformClusterResponse,
@@ -31,6 +38,10 @@ from backend.api.schemas.ai import (
     DisplacementVectorSchema,
     SnapToSatelliteRequest,
     SnapToSatelliteResponse,
+    SuperResolutionAuditSchema,
+    SuperResolutionConfigSchema,
+    SuperResolutionEnhanceRequest,
+    SuperResolutionEnhanceResponse,
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -303,4 +314,93 @@ def deform_cluster_endpoint(request: DeformClusterRequest) -> DeformClusterRespo
         total_parcels=len(results),
         results=results,
     )
+
+
+def _build_sr_config(cfg_schema: SuperResolutionConfigSchema | None) -> SuperResolutionConfig:
+    if cfg_schema is None:
+        return SuperResolutionConfig()
+    return SuperResolutionConfig(
+        scale_factor=cfg_schema.scale_factor,
+        sharpen_amount=cfg_schema.sharpen_amount,
+        sharpen_radius=cfg_schema.sharpen_radius,
+        apply_contrast_enhancement=cfg_schema.apply_contrast_enhancement,
+        lower_percentile=cfg_schema.lower_percentile,
+        upper_percentile=cfg_schema.upper_percentile,
+        original_gsd_m=cfg_schema.original_gsd_m,
+        edge_threshold=cfg_schema.edge_threshold,
+    )
+
+
+@router.post(
+    "/super-resolution/enhance",
+    response_model=SuperResolutionEnhanceResponse,
+    status_code=status.HTTP_200_OK,
+)
+def enhance_raster_endpoint(request: SuperResolutionEnhanceRequest) -> SuperResolutionEnhanceResponse:
+    """Super-resolve, contrast-stretch, and edge-sharpen a low-resolution satellite raster tile."""
+    try:
+        arr = np.asarray(request.raster_matrix, dtype=np.float32)
+        if arr.ndim not in (2, 3) or arr.shape[0] < 2 or arr.shape[1] < 2:
+            raise ValueError("Raster matrix must be 2D (H, W) or 3D (H, W, C) with H, W >= 2")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid raster_matrix: {e}",
+        )
+
+    engine = SuperResolutionEngine(config=_build_sr_config(request.config))
+    enhanced, audit = engine.enhance(arr)
+
+    return SuperResolutionEnhanceResponse(
+        tile_id=request.tile_id,
+        enhanced_matrix=np.round(enhanced, 4).tolist(),
+        audit=SuperResolutionAuditSchema(
+            original_shape=list(audit.original_shape),
+            enhanced_shape=list(audit.enhanced_shape),
+            scale_factor=audit.scale_factor,
+            original_gsd_m=round(audit.original_gsd_m, 4),
+            enhanced_gsd_m=round(audit.enhanced_gsd_m, 4),
+            initial_sharpness=round(audit.initial_sharpness, 6),
+            enhanced_sharpness=round(audit.enhanced_sharpness, 6),
+            sharpness_gain_ratio=round(audit.sharpness_gain_ratio, 4),
+            mean_radiance_before=round(audit.mean_radiance_before, 4),
+            mean_radiance_after=round(audit.mean_radiance_after, 4),
+        ),
+    )
+
+
+@router.post(
+    "/super-resolution/boundary-mask",
+    response_model=BoundaryMaskExtractResponse,
+    status_code=status.HTTP_200_OK,
+)
+def extract_boundary_mask_endpoint(request: BoundaryMaskExtractRequest) -> BoundaryMaskExtractResponse:
+    """Enhance a low-resolution satellite raster patch and extract binary parcel boundary mask."""
+    try:
+        arr = np.asarray(request.raster_matrix, dtype=np.float32)
+        if arr.ndim not in (2, 3) or arr.shape[0] < 2 or arr.shape[1] < 2:
+            raise ValueError("Raster matrix must be 2D (H, W) or 3D (H, W, C) with H, W >= 2")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid raster_matrix: {e}",
+        )
+
+    cfg = _build_sr_config(request.config)
+    engine = SuperResolutionEngine(config=cfg)
+    mask = engine.extract_boundary_mask(arr)
+
+    total_pixels = int(mask.size)
+    edge_count = int(np.count_nonzero(mask))
+    density = (edge_count / total_pixels) if total_pixels > 0 else 0.0
+    enhanced_gsd = cfg.original_gsd_m / float(cfg.scale_factor)
+
+    return BoundaryMaskExtractResponse(
+        tile_id=request.tile_id,
+        boundary_mask=mask.tolist(),
+        edge_pixel_count=edge_count,
+        edge_density_ratio=round(density, 4),
+        enhanced_gsd_m=round(enhanced_gsd, 4),
+    )
+
 

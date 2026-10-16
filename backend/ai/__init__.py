@@ -18,16 +18,32 @@ from backend.ai.deformation import (
     apply_vector_field_to_polygon,
     build_displacement_field_from_pairs,
 )
+from backend.ai.super_resolution import (
+    BicubicUpsampler,
+    ContrastEnhancer,
+    EdgeEnhancer,
+    ImageSharpnessEvaluator,
+    SuperResolutionAudit,
+    SuperResolutionConfig,
+    SuperResolutionEngine,
+)
 
 __all__ = [
     "AlignmentCategory",
     "AlignmentHint",
+    "BicubicUpsampler",
     "BoundaryAlignmentMetrics",
     "BoundaryAlignmentScorer",
+    "ContrastEnhancer",
     "DeformationAudit",
     "DeformationConfig",
     "DisplacementVector",
+    "EdgeEnhancer",
     "ElasticDeformationEngine",
+    "ImageSharpnessEvaluator",
+    "SuperResolutionAudit",
+    "SuperResolutionConfig",
+    "SuperResolutionEngine",
     "VectorFieldInterpolator",
     "apply_vector_field_to_polygon",
     "build_displacement_field_from_pairs",
@@ -37,4 +53,5 @@ __all__ = [
     "compute_iou",
     "compute_modified_hausdorff_distance",
 ]
+
 
