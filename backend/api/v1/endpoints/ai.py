@@ -19,6 +19,10 @@ from backend.ai.super_resolution import (
     SuperResolutionConfig,
     SuperResolutionEngine,
 )
+from backend.ai.vectorization import (
+    PolygonVectorizationEngine,
+    VectorizationConfig,
+)
 from backend.api.schemas.ai import (
     AlignmentHintSchema,
     BatchBoundaryAlignmentRequest,
@@ -42,6 +46,11 @@ from backend.api.schemas.ai import (
     SuperResolutionConfigSchema,
     SuperResolutionEnhanceRequest,
     SuperResolutionEnhanceResponse,
+    VectorizationAuditSchema,
+    VectorizationConfigSchema,
+    VectorizeMaskRequest,
+    VectorizeMaskResponse,
+    VectorizedParcelSchema,
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -402,5 +411,69 @@ def extract_boundary_mask_endpoint(request: BoundaryMaskExtractRequest) -> Bound
         edge_density_ratio=round(density, 4),
         enhanced_gsd_m=round(enhanced_gsd, 4),
     )
+
+
+@router.post(
+    "/vectorization/vectorize",
+    response_model=VectorizeMaskResponse,
+    status_code=status.HTTP_200_OK,
+)
+def vectorize_mask_endpoint(request: VectorizeMaskRequest) -> VectorizeMaskResponse:
+    """Vectorize a binary foreground or boundary edge mask into simplified GeoJSON parcel polygons."""
+    try:
+        mask = np.asarray(request.binary_mask, dtype=bool)
+        if mask.ndim != 2 or mask.shape[0] < 2 or mask.shape[1] < 2:
+            raise ValueError("binary_mask must be a 2D boolean matrix with dimensions >= 2x2")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid binary_mask: {e}",
+        )
+
+    cfg = VectorizationConfig()
+    if request.config is not None:
+        cfg = VectorizationConfig(
+            origin_x=request.config.origin_x,
+            origin_y=request.config.origin_y,
+            gsd_m=request.config.gsd_m,
+            simplify_tolerance_m=request.config.simplify_tolerance_m,
+            min_area_sqm=request.config.min_area_sqm,
+            max_area_sqm=request.config.max_area_sqm,
+            preserve_topology=request.config.preserve_topology,
+            connectivity=request.config.connectivity,
+        )
+
+    engine = PolygonVectorizationEngine(config=cfg)
+    mask_type = request.mask_type.upper()
+    if mask_type == "EDGE":
+        parcels, audit = engine.vectorize_edge_mask(mask)
+    else:
+        parcels, audit = engine.vectorize_foreground_mask(mask)
+
+    parcel_schemas = [
+        VectorizedParcelSchema(
+            parcel_id=p.parcel_id,
+            geojson=mapping(p.polygon),
+            area_sqm=round(p.area_sqm, 2),
+            perimeter_m=round(p.perimeter_m, 2),
+            vertex_count_raw=p.vertex_count_raw,
+            vertex_count_simplified=p.vertex_count_simplified,
+            pixel_count=p.pixel_count,
+        )
+        for p in parcels
+    ]
+
+    return VectorizeMaskResponse(
+        tile_id=request.tile_id,
+        parcels=parcel_schemas,
+        audit=VectorizationAuditSchema(
+            total_parcels_extracted=audit.total_parcels_extracted,
+            noise_components_filtered=audit.noise_components_filtered,
+            oversized_components_filtered=audit.oversized_components_filtered,
+            total_area_sqm=round(audit.total_area_sqm, 2),
+            all_geometries_valid=audit.all_geometries_valid,
+        ),
+    )
+
 
 

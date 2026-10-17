@@ -284,3 +284,33 @@ class TestSuperResolutionAPI:
         assert len(data["boundary_mask"][0]) == 16
 
 
+class TestVectorizationAPI:
+    """Tests for POST /api/v1/ai/vectorization/vectorize endpoint."""
+
+    def test_vectorize_foreground_mask_endpoint(self):
+        # 20x20 mask with a 10x10 parcel at [5:15, 5:15]
+        mask = [[(5 <= r < 15 and 5 <= c < 15) for c in range(20)] for r in range(20)]
+        payload = {
+            "tile_id": "VEC-TILE-01",
+            "binary_mask": mask,
+            "mask_type": "FOREGROUND",
+            "config": {
+                "origin_x": 500000.0,
+                "origin_y": 2800000.0,
+                "gsd_m": 2.0,
+                "simplify_tolerance_m": 0.5,
+                "min_area_sqm": 50.0,
+            },
+        }
+
+        resp = client.post("/api/v1/ai/vectorization/vectorize", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["tile_id"] == "VEC-TILE-01"
+        assert data["audit"]["total_parcels_extracted"] == 1
+        assert data["audit"]["all_geometries_valid"] is True
+        assert pytest.approx(400.0, rel=0.02) == data["parcels"][0]["area_sqm"]
+        assert data["parcels"][0]["geojson"]["type"] == "Polygon"
+
+
+

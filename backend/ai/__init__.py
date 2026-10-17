@@ -27,13 +27,27 @@ from backend.ai.super_resolution import (
     SuperResolutionConfig,
     SuperResolutionEngine,
 )
+from backend.ai.vectorization import (
+    AffineGeoTransform,
+    BoundarySimplifier,
+    ConnectedComponent,
+    ConnectedComponentExtractor,
+    PolygonVectorizationEngine,
+    VectorizationAudit,
+    VectorizationConfig,
+    VectorizedParcel,
+)
 
 __all__ = [
+    "AffineGeoTransform",
     "AlignmentCategory",
     "AlignmentHint",
     "BicubicUpsampler",
     "BoundaryAlignmentMetrics",
     "BoundaryAlignmentScorer",
+    "BoundarySimplifier",
+    "ConnectedComponent",
+    "ConnectedComponentExtractor",
     "ContrastEnhancer",
     "DeformationAudit",
     "DeformationConfig",
@@ -41,10 +55,14 @@ __all__ = [
     "EdgeEnhancer",
     "ElasticDeformationEngine",
     "ImageSharpnessEvaluator",
+    "PolygonVectorizationEngine",
     "SuperResolutionAudit",
     "SuperResolutionConfig",
     "SuperResolutionEngine",
     "VectorFieldInterpolator",
+    "VectorizationAudit",
+    "VectorizationConfig",
+    "VectorizedParcel",
     "apply_vector_field_to_polygon",
     "build_displacement_field_from_pairs",
     "compute_boundary_f1",
@@ -53,5 +71,6 @@ __all__ = [
     "compute_iou",
     "compute_modified_hausdorff_distance",
 ]
+
 
 

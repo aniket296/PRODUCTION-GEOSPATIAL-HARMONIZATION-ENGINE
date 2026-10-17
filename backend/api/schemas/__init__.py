@@ -21,6 +21,11 @@ from backend.api.schemas.ai import (
     SuperResolutionConfigSchema,
     SuperResolutionEnhanceRequest,
     SuperResolutionEnhanceResponse,
+    VectorizationAuditSchema,
+    VectorizationConfigSchema,
+    VectorizeMaskRequest,
+    VectorizeMaskResponse,
+    VectorizedParcelSchema,
 )
 from backend.api.schemas.edge import (
     ClusterHealthSummaryResponse,
@@ -147,5 +152,10 @@ __all__ = [
     "ToposheetResponse",
     "ValidateTopologyBatchRequest",
     "ValidateTopologyBatchResponse",
+    "VectorizationAuditSchema",
+    "VectorizationConfigSchema",
+    "VectorizeMaskRequest",
+    "VectorizeMaskResponse",
+    "VectorizedParcelSchema",
 ]
 

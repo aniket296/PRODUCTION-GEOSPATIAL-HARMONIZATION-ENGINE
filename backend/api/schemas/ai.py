@@ -237,3 +237,56 @@ class BoundaryMaskExtractResponse(BaseModel):
     enhanced_gsd_m: float
 
 
+class VectorizationConfigSchema(BaseModel):
+    """Configuration for automated raster-to-vector polygon extraction."""
+
+    origin_x: float = Field(0.0, description="Geographic X coordinate of raster top-left origin")
+    origin_y: float = Field(0.0, description="Geographic Y coordinate of raster top-left origin")
+    gsd_m: float = Field(1.0, gt=0.0, description="Ground Sampling Distance per pixel in meters")
+    simplify_tolerance_m: float = Field(1.0, ge=0.0, description="Douglas-Peucker simplification tolerance in meters")
+    min_area_sqm: float = Field(25.0, gt=0.0, description="Minimum parcel area in square meters")
+    max_area_sqm: Optional[float] = Field(None, gt=0.0, description="Maximum parcel area in square meters")
+    preserve_topology: bool = Field(True, description="Preserve polygon topology during simplification")
+    connectivity: int = Field(4, description="Connected-component connectivity (4 or 8)")
+
+
+class VectorizedParcelSchema(BaseModel):
+    """Vectorized parcel geometry and metadata."""
+
+    parcel_id: str
+    geojson: Dict[str, Any]
+    area_sqm: float
+    perimeter_m: float
+    vertex_count_raw: int
+    vertex_count_simplified: int
+    pixel_count: int
+
+
+class VectorizationAuditSchema(BaseModel):
+    """Audit metrics for a raster-to-vector polygon extraction operation."""
+
+    total_parcels_extracted: int
+    noise_components_filtered: int
+    oversized_components_filtered: int
+    total_area_sqm: float
+    all_geometries_valid: bool
+
+
+class VectorizeMaskRequest(BaseModel):
+    """Request to vectorize a binary foreground or boundary edge mask into simplified GeoJSON polygons."""
+
+    tile_id: str = Field(..., min_length=1, description="Identifier of the raster tile")
+    binary_mask: List[List[bool]] = Field(..., min_length=2, description="2D boolean mask (H, W)")
+    mask_type: str = Field("FOREGROUND", description="FOREGROUND (True = parcel interior) or EDGE (True = bund wall)")
+    config: Optional[VectorizationConfigSchema] = None
+
+
+class VectorizeMaskResponse(BaseModel):
+    """Response containing extracted GeoJSON parcel polygons and vectorization audit."""
+
+    tile_id: str
+    parcels: List[VectorizedParcelSchema]
+    audit: VectorizationAuditSchema
+
+
+
