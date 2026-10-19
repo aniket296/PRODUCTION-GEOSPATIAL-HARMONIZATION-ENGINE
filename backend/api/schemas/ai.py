@@ -290,3 +290,71 @@ class VectorizeMaskResponse(BaseModel):
 
 
 
+
+class ChangeDetectionConfigSchema(BaseModel):
+    """Configuration for multi-temporal change detection and encroachment flagging."""
+
+    origin_x: float = Field(0.0, description="Geographic X coordinate of raster top-left origin")
+    origin_y: float = Field(0.0, description="Geographic Y coordinate of raster top-left origin")
+    gsd_m: float = Field(10.0, gt=0.0, description="Ground Sampling Distance per pixel in meters")
+    change_magnitude_threshold: float = Field(0.25, gt=0.0, description="Change Vector Analysis magnitude threshold")
+    buffer_tolerance_m: float = Field(0.5, ge=0.0, description="Boundary registration tolerance in meters")
+    min_encroachment_sqm: float = Field(5.0, ge=0.0, description="Minimum spillover area to flag as encroachment")
+    min_footprint_sqm: float = Field(4.0, gt=0.0, description="Minimum new built-up footprint area in square meters")
+
+
+class TemporalChangeSchema(BaseModel):
+    """Summary statistics of multi-temporal raster differencing."""
+
+    changed_pixel_count: int
+    changed_fraction: float
+    builtup_pixel_count: int
+    mean_ndvi_delta: float
+    mean_ndbi_delta: float
+
+
+class EncroachmentResultSchema(BaseModel):
+    """Geometric encroachment assessment for a parcel."""
+
+    parcel_id: str
+    has_encroachment: bool
+    severity: str = Field(..., description="NONE, MINOR, MODERATE or CRITICAL")
+    encroached_area_sqm: float
+    encroachment_percentage: float
+    max_lateral_intrusion_m: float
+    public_corridor_intrusion_sqm: float
+    affected_corridor_ids: List[str]
+    encroached_geojson: Optional[Dict[str, Any]] = None
+
+
+class ChangeDetectionAnalyzeRequest(BaseModel):
+    """Request to analyze a T1/T2 raster pair against a legal cadastral parcel."""
+
+    parcel_id: str = Field(..., min_length=1, description="Identifier of the land parcel")
+    cadastre_geojson: Dict[str, Any] = Field(..., description="GeoJSON polygon of the legal parcel")
+    t1_raster: List[List[List[float]]] = Field(..., min_length=2, description="Baseline (H, W, 3) raster: Red, NIR, SWIR")
+    t2_raster: List[List[List[float]]] = Field(..., min_length=2, description="Current (H, W, 3) raster: Red, NIR, SWIR")
+    public_corridors: Optional[Dict[str, Dict[str, Any]]] = Field(
+        None, description="Map of corridor id to GeoJSON polygon (roads, canals, rights-of-way)"
+    )
+    config: Optional[ChangeDetectionConfigSchema] = None
+
+
+class ChangeDetectionAnalyzeResponse(BaseModel):
+    """Per-parcel change detection and encroachment report."""
+
+    parcel_id: str
+    temporal_change: TemporalChangeSchema
+    encroachment: EncroachmentResultSchema
+    new_footprints: List[Dict[str, Any]]
+
+
+class EncroachmentEvaluateRequest(BaseModel):
+    """Request to evaluate geometric encroachment of an occupied footprint on a legal parcel."""
+
+    parcel_id: str = Field(..., min_length=1, description="Identifier of the land parcel")
+    cadastre_geojson: Dict[str, Any] = Field(..., description="GeoJSON polygon of the legal parcel")
+    occupied_geojson: Dict[str, Any] = Field(..., description="GeoJSON geometry of the occupied footprint")
+    public_corridors: Optional[Dict[str, Dict[str, Any]]] = None
+    buffer_tolerance_m: float = Field(0.5, ge=0.0, description="Boundary tolerance in meters")
+    min_encroachment_sqm: float = Field(5.0, ge=0.0, description="Minimum spillover area to flag")

@@ -26,6 +26,12 @@ from backend.api.schemas.ai import (
     VectorizeMaskRequest,
     VectorizeMaskResponse,
     VectorizedParcelSchema,
+    ChangeDetectionAnalyzeRequest,
+    ChangeDetectionAnalyzeResponse,
+    ChangeDetectionConfigSchema,
+    EncroachmentEvaluateRequest,
+    EncroachmentResultSchema,
+    TemporalChangeSchema,
 )
 from backend.api.schemas.edge import (
     ClusterHealthSummaryResponse,
@@ -157,5 +163,11 @@ __all__ = [
     "VectorizeMaskRequest",
     "VectorizeMaskResponse",
     "VectorizedParcelSchema",
+    "ChangeDetectionAnalyzeRequest",
+    "ChangeDetectionAnalyzeResponse",
+    "ChangeDetectionConfigSchema",
+    "EncroachmentEvaluateRequest",
+    "EncroachmentResultSchema",
+    "TemporalChangeSchema",
 ]
 

@@ -5,9 +5,15 @@ from __future__ import annotations
 from typing import Any, Dict, List, Tuple
 from fastapi import APIRouter, HTTPException, status
 import numpy as np
-from shapely.geometry import Polygon, mapping, shape
+from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 
 from backend.ai.alignment import BoundaryAlignmentScorer
+from backend.ai.change_detection import (
+    ChangeDetectionConfig,
+    EncroachmentAnalysisResult,
+    EncroachmentDetector,
+    MultiTemporalChangeEngine,
+)
 from backend.ai.deformation import (
     DeformationAudit,
     DeformationConfig,
@@ -51,6 +57,11 @@ from backend.api.schemas.ai import (
     VectorizeMaskRequest,
     VectorizeMaskResponse,
     VectorizedParcelSchema,
+    ChangeDetectionAnalyzeRequest,
+    ChangeDetectionAnalyzeResponse,
+    EncroachmentEvaluateRequest,
+    EncroachmentResultSchema,
+    TemporalChangeSchema,
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -477,3 +488,106 @@ def vectorize_mask_endpoint(request: VectorizeMaskRequest) -> VectorizeMaskRespo
 
 
 
+
+def _parse_polygonal(geojson: Dict[str, Any], label: str) -> Any:
+    """Parse GeoJSON into a Polygon/MultiPolygon or raise HTTP 400."""
+    try:
+        geom = shape(geojson)
+        if not isinstance(geom, (Polygon, MultiPolygon)) or geom.is_empty:
+            raise ValueError("geometry must be a non-empty Polygon or MultiPolygon")
+        return geom
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {label}: {e}",
+        )
+
+
+def _parse_corridors(corridors: Dict[str, Dict[str, Any]] | None) -> Dict[str, Any]:
+    return {cid: _parse_polygonal(g, f"public_corridors[{cid}]") for cid, g in (corridors or {}).items()}
+
+
+def _encroachment_to_schema(res: EncroachmentAnalysisResult) -> EncroachmentResultSchema:
+    return EncroachmentResultSchema(
+        parcel_id=res.parcel_id,
+        has_encroachment=res.has_encroachment,
+        severity=res.severity.value,
+        encroached_area_sqm=round(res.encroached_area_sqm, 2),
+        encroachment_percentage=round(res.encroachment_percentage, 4),
+        max_lateral_intrusion_m=round(res.max_lateral_intrusion_m, 3),
+        public_corridor_intrusion_sqm=round(res.public_corridor_intrusion_sqm, 2),
+        affected_corridor_ids=list(res.affected_corridor_ids),
+        encroached_geojson=mapping(res.encroached_geometry) if res.encroached_geometry is not None else None,
+    )
+
+
+@router.post(
+    "/change-detection/analyze",
+    response_model=ChangeDetectionAnalyzeResponse,
+    status_code=status.HTTP_200_OK,
+)
+def analyze_change_detection_endpoint(request: ChangeDetectionAnalyzeRequest) -> ChangeDetectionAnalyzeResponse:
+    """Detect new built-up construction between T1/T2 rasters and flag cadastral encroachment."""
+    cadastre = _parse_polygonal(request.cadastre_geojson, "cadastre_geojson")
+    corridors = _parse_corridors(request.public_corridors)
+
+    try:
+        t1 = np.asarray(request.t1_raster, dtype=np.float32)
+        t2 = np.asarray(request.t2_raster, dtype=np.float32)
+        if t1.ndim != 3 or t1.shape[2] < 3:
+            raise ValueError("rasters must be 3D (H, W, >=3) with bands ordered (Red, NIR, SWIR)")
+        if t1.shape != t2.shape:
+            raise ValueError(f"raster shape mismatch: {t1.shape} vs {t2.shape}")
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid raster input: {e}",
+        )
+
+    cfg = ChangeDetectionConfig()
+    if request.config is not None:
+        cfg = ChangeDetectionConfig(
+            origin_x=request.config.origin_x,
+            origin_y=request.config.origin_y,
+            gsd_m=request.config.gsd_m,
+            change_magnitude_threshold=request.config.change_magnitude_threshold,
+            buffer_tolerance_m=request.config.buffer_tolerance_m,
+            min_encroachment_sqm=request.config.min_encroachment_sqm,
+            min_footprint_sqm=request.config.min_footprint_sqm,
+        )
+
+    engine = MultiTemporalChangeEngine(config=cfg, public_corridors=corridors)
+    report = engine.analyze_parcel_change(request.parcel_id, cadastre, t1, t2)
+    tc = report.temporal_change
+
+    return ChangeDetectionAnalyzeResponse(
+        parcel_id=report.parcel_id,
+        temporal_change=TemporalChangeSchema(
+            changed_pixel_count=tc.changed_pixel_count,
+            changed_fraction=round(tc.changed_fraction, 6),
+            builtup_pixel_count=tc.builtup_pixel_count,
+            mean_ndvi_delta=round(tc.mean_ndvi_delta, 4),
+            mean_ndbi_delta=round(tc.mean_ndbi_delta, 4),
+        ),
+        encroachment=_encroachment_to_schema(report.encroachment),
+        new_footprints=[mapping(p) for p in report.new_footprint_polygons],
+    )
+
+
+@router.post(
+    "/change-detection/encroachment",
+    response_model=EncroachmentResultSchema,
+    status_code=status.HTTP_200_OK,
+)
+def evaluate_encroachment_endpoint(request: EncroachmentEvaluateRequest) -> EncroachmentResultSchema:
+    """Evaluate spillover of an occupied footprint beyond a legal parcel and into public corridors."""
+    cadastre = _parse_polygonal(request.cadastre_geojson, "cadastre_geojson")
+    occupied = _parse_polygonal(request.occupied_geojson, "occupied_geojson")
+    corridors = _parse_corridors(request.public_corridors)
+
+    detector = EncroachmentDetector(
+        buffer_tolerance_m=request.buffer_tolerance_m,
+        min_encroachment_sqm=request.min_encroachment_sqm,
+    )
+    res = detector.evaluate_parcel(request.parcel_id, cadastre, occupied, public_corridors=corridors)
+    return _encroachment_to_schema(res)

@@ -314,3 +314,106 @@ class TestVectorizationAPI:
 
 
 
+
+class TestChangeDetectionAPI:
+    """Tests for POST /api/v1/ai/change-detection endpoints."""
+
+    @staticmethod
+    def _raster_pair():
+        # 32x32x3 (Red, NIR, SWIR): vegetated baseline; built-up block at rows 10:26, cols 12:28 in T2
+        t1 = [[[0.10, 0.70, 0.15] for _ in range(32)] for _ in range(32)]
+        t2 = [[list(px) for px in row] for row in t1]
+        for r in range(10, 26):
+            for c in range(12, 28):
+                t2[r][c] = [0.45, 0.20, 0.55]
+        return t1, t2
+
+    def test_analyze_change_detection_flags_encroachment(self):
+        t1, t2 = self._raster_pair()
+        payload = {
+            "parcel_id": "KHASRA-TEMPORAL-API-01",
+            "cadastre_geojson": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [40.0, 0.0], [40.0, 64.0], [0.0, 64.0], [0.0, 0.0]]],
+            },
+            "t1_raster": t1,
+            "t2_raster": t2,
+            "config": {
+                "origin_x": 0.0,
+                "origin_y": 64.0,
+                "gsd_m": 2.0,
+                "change_magnitude_threshold": 0.25,
+                "buffer_tolerance_m": 0.0,
+                "min_encroachment_sqm": 20.0,
+            },
+        }
+
+        resp = client.post("/api/v1/ai/change-detection/analyze", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["parcel_id"] == "KHASRA-TEMPORAL-API-01"
+        assert data["temporal_change"]["changed_pixel_count"] == 256
+        assert data["encroachment"]["has_encroachment"] is True
+        assert data["encroachment"]["severity"] == "CRITICAL"
+        assert pytest.approx(512.0, rel=0.05) == data["encroachment"]["encroached_area_sqm"]
+        assert pytest.approx(16.0, rel=0.05) == data["encroachment"]["max_lateral_intrusion_m"]
+        assert len(data["new_footprints"]) == 1
+
+    def test_analyze_change_detection_raster_shape_mismatch(self):
+        t1, t2 = self._raster_pair()
+        payload = {
+            "parcel_id": "BAD-RASTER",
+            "cadastre_geojson": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]]],
+            },
+            "t1_raster": t1,
+            "t2_raster": t2[:16],
+        }
+        resp = client.post("/api/v1/ai/change-detection/analyze", json=payload)
+        assert resp.status_code == 400
+
+    def test_evaluate_encroachment_with_public_corridor(self):
+        payload = {
+            "parcel_id": "KHASRA-ROW-01",
+            "cadastre_geojson": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0]]],
+            },
+            "occupied_geojson": {
+                "type": "Polygon",
+                "coordinates": [[
+                    [0.0, 0.0], [100.0, 0.0], [100.0, 20.0], [112.0, 20.0],
+                    [112.0, 70.0], [100.0, 70.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0],
+                ]],
+            },
+            "public_corridors": {
+                "NH-ROW-01": {
+                    "type": "Polygon",
+                    "coordinates": [[[100.0, 0.0], [120.0, 0.0], [120.0, 100.0], [100.0, 100.0], [100.0, 0.0]]],
+                }
+            },
+            "buffer_tolerance_m": 0.0,
+            "min_encroachment_sqm": 10.0,
+        }
+
+        resp = client.post("/api/v1/ai/change-detection/encroachment", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["has_encroachment"] is True
+        assert pytest.approx(600.0, rel=0.01) == data["encroached_area_sqm"]
+        assert pytest.approx(600.0, rel=0.01) == data["public_corridor_intrusion_sqm"]
+        assert data["affected_corridor_ids"] == ["NH-ROW-01"]
+        assert data["severity"] in ("MODERATE", "CRITICAL")
+
+    def test_evaluate_encroachment_invalid_geometry(self):
+        payload = {
+            "parcel_id": "BAD-GEOM",
+            "cadastre_geojson": {"type": "Point", "coordinates": [0.0, 0.0]},
+            "occupied_geojson": {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 0.0]]],
+            },
+        }
+        resp = client.post("/api/v1/ai/change-detection/encroachment", json=payload)
+        assert resp.status_code == 400
