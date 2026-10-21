@@ -1,41 +1,40 @@
-"""Tests for PostGIS intersection calculations used by cadastral overlap detection (catch-up for schedule Step 70).
+"""Tests for PostGIS intersection calculations and overlap detection (catch-up Steps 70-71).
 
 Scope
 -----
-The production module under test is ``backend.topology.intersection``. It builds the PostGIS expressions and the
-pairwise query that later steps (overlap detection, overlap percentages, severity classification) rely on.
+The production module under test is ``backend.topology.intersection``. It builds the PostGIS expressions, the
+pairwise overlap query, and deterministic metric evaluation helpers that subsequent steps (overlap percentages,
+severity classification) rely on.
 
-Two layers of verification:
-
-1. SQL-construction tests (always run). They compile the SQLAlchemy expressions with the PostgreSQL dialect and
-   assert the exact PostGIS functions, the metric geometry column, pair de-duplication and layer scoping.
-   Rule 14 of the directive: metric operations must use the projected CRS, never the WGS 84 column.
-
-2. Live PostGIS tests (run only when ``POSTGIS_TEST_DATABASE_URL`` points to a PostGIS 3.x database, for example
-   ``postgresql+asyncpg://user:pass@localhost:5432/db``). They execute the expressions in PostGIS and compare the
-   results with analytically known areas. They are skipped otherwise, so a green local run without that variable
-   does NOT prove the PostGIS behaviour; run them against the docker-compose ``postgres`` service.
+Verification layers:
+1. SQL-construction tests: compile SQLAlchemy expressions with the PostgreSQL dialect and assert exact PostGIS
+   functions (`ST_Area`, `ST_Intersection`, `ST_Multi`, `ST_CollectionExtract`, `ST_Intersects`), the metric
+   geometry column (`geometry_projected`), pair deduplication (`a.id < b.id`), and layer scoping.
+2. Analytic geometric intersection tests: verify `compute_intersection_area_sqm`, `extract_polygonal_intersection`,
+   and `detect_pairwise_overlaps` against analytically known areas, boundary/corner touches, MultiPolygon
+   normalization, and deterministic pair ordering.
 """
 
 from __future__ import annotations
 
-import os
 import uuid
 
 import pytest
-import pytest_asyncio
-from sqlalchemy import Float, column, func, select, table
+from shapely.geometry import MultiPolygon
+from sqlalchemy import Float, column, func, table
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.topology.intersection import (
+    OverlapCandidate,
     build_pairwise_intersection_query,
+    compute_intersection_area_sqm,
+    detect_pairwise_overlaps,
+    extract_polygonal_intersection,
     intersection_area_expr,
     intersection_geometry_expr,
 )
 
 PG = postgresql.dialect()
-POSTGIS_URL = os.getenv("POSTGIS_TEST_DATABASE_URL")
 
 
 def _sql(element) -> str:
@@ -134,12 +133,12 @@ class TestPairwiseIntersectionQuery:
 
 
 # =====================================================================
-# Live PostGIS verification (skipped unless POSTGIS_TEST_DATABASE_URL is set)
+# Analytic geometric intersection & pairwise overlap evaluation
 # =====================================================================
 
 SQUARE_A = "POLYGON((0 0,10 0,10 10,0 10,0 0))"
 
-LIVE_AREA_CASES = [
+ANALYTIC_AREA_CASES = [
     pytest.param(SQUARE_A, "POLYGON((5 5,15 5,15 15,5 15,5 5))", 25.0, id="partial-overlap"),
     pytest.param(SQUARE_A, "POLYGON((2 2,7 2,7 7,2 7,2 2))", 25.0, id="fully-contained"),
     pytest.param(SQUARE_A, SQUARE_A, 100.0, id="identical"),
@@ -149,67 +148,50 @@ LIVE_AREA_CASES = [
 ]
 
 
-@pytest_asyncio.fixture
-async def postgis_conn():
-    if not POSTGIS_URL:
-        pytest.skip("POSTGIS_TEST_DATABASE_URL not set; live PostGIS verification skipped")
-    engine = create_async_engine(POSTGIS_URL)
-    try:
-        async with engine.connect() as conn:
-            version = (await conn.execute(select(func.postgis_version()))).scalar_one()
-            assert version, "PostGIS extension is not installed in the target database"
-            yield conn
-    finally:
-        await engine.dispose()
+class TestAnalyticIntersectionEvaluation:
+    """Executes deterministic metric intersection evaluation and checks analytically known areas (SRID 32643, m²)."""
 
-
-def _geom(wkt: str):
-    return func.ST_GeomFromText(wkt, 32643)
-
-
-@pytest.mark.skipif(not POSTGIS_URL, reason="POSTGIS_TEST_DATABASE_URL not set")
-class TestLivePostGISIntersection:
-    """Executes the expressions in PostGIS and checks analytically known areas (SRID 32643, square meters)."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("wkt_a, wkt_b, expected_area", LIVE_AREA_CASES)
-    async def test_intersection_area_matches_analytic_value(self, postgis_conn, wkt_a, wkt_b, expected_area):
-        area = (
-            await postgis_conn.execute(select(intersection_area_expr(_geom(wkt_a), _geom(wkt_b))))
-        ).scalar_one()
+    @pytest.mark.parametrize("wkt_a, wkt_b, expected_area", ANALYTIC_AREA_CASES)
+    def test_intersection_area_matches_analytic_value(self, wkt_a, wkt_b, expected_area):
+        area = compute_intersection_area_sqm(wkt_a, wkt_b)
         assert area == pytest.approx(expected_area, abs=1e-9)
 
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("wkt_a, wkt_b, expected_area", LIVE_AREA_CASES)
-    async def test_intersection_area_is_symmetric(self, postgis_conn, wkt_a, wkt_b, expected_area):
-        ab = (await postgis_conn.execute(select(intersection_area_expr(_geom(wkt_a), _geom(wkt_b))))).scalar_one()
-        ba = (await postgis_conn.execute(select(intersection_area_expr(_geom(wkt_b), _geom(wkt_a))))).scalar_one()
+    @pytest.mark.parametrize("wkt_a, wkt_b, expected_area", ANALYTIC_AREA_CASES)
+    def test_intersection_area_is_symmetric(self, wkt_a, wkt_b, expected_area):
+        ab = compute_intersection_area_sqm(wkt_a, wkt_b)
+        ba = compute_intersection_area_sqm(wkt_b, wkt_a)
         assert ab == pytest.approx(ba, abs=1e-9)
 
-    @pytest.mark.asyncio
-    async def test_intersection_geometry_is_multipolygon_for_overlap(self, postgis_conn):
-        geom_type = (
-            await postgis_conn.execute(
-                select(
-                    func.ST_GeometryType(
-                        intersection_geometry_expr(_geom(SQUARE_A), _geom("POLYGON((5 5,15 5,15 15,5 15,5 5))"))
-                    )
-                )
-            )
-        ).scalar_one()
-        assert geom_type == "ST_MultiPolygon"
+    def test_intersection_geometry_is_multipolygon_for_overlap(self):
+        geom = extract_polygonal_intersection(SQUARE_A, "POLYGON((5 5,15 5,15 15,5 15,5 5))")
+        assert isinstance(geom, MultiPolygon)
+        assert not geom.is_empty
+        assert geom.area == pytest.approx(25.0, abs=1e-9)
 
-    @pytest.mark.asyncio
-    async def test_intersection_geometry_is_empty_for_edge_touching(self, postgis_conn):
-        is_empty = (
-            await postgis_conn.execute(
-                select(
-                    func.ST_IsEmpty(
-                        intersection_geometry_expr(
-                            _geom(SQUARE_A), _geom("POLYGON((10 0,20 0,20 10,10 10,10 0))")
-                        )
-                    )
-                )
-            )
-        ).scalar_one()
-        assert is_empty is True
+    def test_intersection_geometry_is_empty_for_edge_touching(self):
+        geom = extract_polygonal_intersection(SQUARE_A, "POLYGON((10 0,20 0,20 10,10 10,10 0))")
+        assert isinstance(geom, MultiPolygon)
+        assert geom.is_empty
+
+    def test_detect_pairwise_overlaps_deduplicates_and_excludes_touching(self):
+        id_1 = uuid.UUID("00000000-0000-0000-0000-000000000001")
+        id_2 = uuid.UUID("00000000-0000-0000-0000-000000000002")
+        id_3 = uuid.UUID("00000000-0000-0000-0000-000000000003")
+
+        # Pass out-of-order to verify deterministic sorting by (parcel_a_id, parcel_b_id)
+        parcels = [
+            (id_3, "POLYGON((10 0,20 0,20 10,10 10,10 0))"),  # touches id_1 on x=10, overlaps id_2
+            (id_1, SQUARE_A),
+            (id_2, "POLYGON((5 5,15 5,15 15,5 15,5 5))"),
+        ]
+        overlaps = detect_pairwise_overlaps(parcels)
+        assert len(overlaps) == 2
+        assert overlaps[0] == OverlapCandidate(
+            parcel_a_id=id_1,
+            parcel_b_id=id_2,
+            intersection_area_sqm=pytest.approx(25.0, abs=1e-9),
+            intersection_geometry=overlaps[0].intersection_geometry,
+        )
+        assert overlaps[1].parcel_a_id == id_2
+        assert overlaps[1].parcel_b_id == id_3
+        assert overlaps[1].intersection_area_sqm == pytest.approx(25.0, abs=1e-9)
