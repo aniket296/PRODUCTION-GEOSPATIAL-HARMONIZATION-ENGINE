@@ -10,14 +10,28 @@ from backend.topology.intersection import (
     intersection_area_expr,
     intersection_geometry_expr,
 )
+from backend.topology.overlap_percentage import (
+    OverlapPercentageMetrics,
+    build_pairwise_overlap_percentage_query,
+    compute_overlap_percentage,
+    compute_overlap_percentages,
+    evaluate_pair_overlap_metrics,
+    overlap_percentage_expr,
+)
 
 __all__ = [
     "PROJECTED_SRID",
     "OverlapCandidate",
+    "OverlapPercentageMetrics",
     "build_pairwise_intersection_query",
+    "build_pairwise_overlap_percentage_query",
     "compute_intersection_area_sqm",
+    "compute_overlap_percentage",
+    "compute_overlap_percentages",
     "detect_pairwise_overlaps",
+    "evaluate_pair_overlap_metrics",
     "extract_polygonal_intersection",
     "intersection_area_expr",
     "intersection_geometry_expr",
+    "overlap_percentage_expr",
 ]
