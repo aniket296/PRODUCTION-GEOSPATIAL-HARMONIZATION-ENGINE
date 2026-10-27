@@ -7,6 +7,15 @@ from backend.topology.compactness import (
     evaluate_geometry_compactness,
     polsby_popper_expr,
 )
+from backend.topology.gap import (
+    DEFAULT_BOUNDARY_GAP_TOLERANCE_M,
+    BoundaryGapCandidate,
+    build_boundary_gap_detection_query,
+    detect_layer_boundary_gaps,
+    evaluate_pairwise_boundary_gap,
+    extract_pairwise_gap_geometry,
+    pairwise_gap_geometry_expr,
+)
 from backend.topology.intersection import (
     PROJECTED_SRID,
     OverlapCandidate,
@@ -37,14 +46,17 @@ from backend.topology.sliver import (
 )
 
 __all__ = [
+    "DEFAULT_BOUNDARY_GAP_TOLERANCE_M",
     "DEFAULT_SLIVER_MAX_AREA_SQM",
     "DEFAULT_SLIVER_MAX_POLSBY_POPPER",
     "FOUR_PI",
     "PROJECTED_SRID",
+    "BoundaryGapCandidate",
     "CompactnessMetrics",
     "OverlapCandidate",
     "OverlapPercentageMetrics",
     "SliverEvaluationResult",
+    "build_boundary_gap_detection_query",
     "build_pairwise_intersection_query",
     "build_pairwise_overlap_percentage_query",
     "build_sliver_detection_query",
@@ -52,16 +64,20 @@ __all__ = [
     "compute_overlap_percentage",
     "compute_overlap_percentages",
     "compute_polsby_popper",
+    "detect_layer_boundary_gaps",
     "detect_layer_slivers",
     "detect_pairwise_overlaps",
     "evaluate_geometry_compactness",
     "evaluate_geometry_sliver",
     "evaluate_pair_overlap_metrics",
+    "evaluate_pairwise_boundary_gap",
+    "extract_pairwise_gap_geometry",
     "extract_polygonal_intersection",
     "intersection_area_expr",
     "intersection_geometry_expr",
     "is_sliver_by_metrics",
     "overlap_percentage_expr",
+    "pairwise_gap_geometry_expr",
     "polsby_popper_expr",
     "sliver_predicate_expr",
 ]
