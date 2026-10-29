@@ -45,8 +45,33 @@ from backend.topology.sliver import (
     sliver_predicate_expr,
 )
 
+from backend.topology.vertices_and_nodes import (
+    DEFAULT_DANGLING_SNAP_TOLERANCE_M,
+    DEFAULT_DUPLICATE_VERTEX_TOLERANCE_M,
+    DanglingNodeAnomaly,
+    DuplicateVertexAnomaly,
+    build_dangling_node_detection_query,
+    build_duplicate_vertex_detection_query,
+    detect_dangling_nodes,
+    detect_duplicate_vertices,
+    detect_layer_duplicate_vertices,
+    detect_polygon_spike_nodes,
+    has_repeated_points_expr,
+)
+
 __all__ = [
     "DEFAULT_BOUNDARY_GAP_TOLERANCE_M",
+    "DEFAULT_DANGLING_SNAP_TOLERANCE_M",
+    "DEFAULT_DUPLICATE_VERTEX_TOLERANCE_M",
+    "DanglingNodeAnomaly",
+    "DuplicateVertexAnomaly",
+    "build_dangling_node_detection_query",
+    "build_duplicate_vertex_detection_query",
+    "detect_dangling_nodes",
+    "detect_duplicate_vertices",
+    "detect_layer_duplicate_vertices",
+    "detect_polygon_spike_nodes",
+    "has_repeated_points_expr",
     "DEFAULT_SLIVER_MAX_AREA_SQM",
     "DEFAULT_SLIVER_MAX_POLSBY_POPPER",
     "FOUR_PI",
