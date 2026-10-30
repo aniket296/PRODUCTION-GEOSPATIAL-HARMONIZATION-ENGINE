@@ -34,6 +34,10 @@ from backend.topology.overlap_percentage import (
     evaluate_pair_overlap_metrics,
     overlap_percentage_expr,
 )
+from backend.topology.severity import (
+    DEFAULT_OVERLAP_THRESHOLD_PERCENT,
+    classify_topology_severity,
+)
 from backend.topology.sliver import (
     DEFAULT_SLIVER_MAX_AREA_SQM,
     DEFAULT_SLIVER_MAX_POLSBY_POPPER,
@@ -63,10 +67,12 @@ __all__ = [
     "DEFAULT_BOUNDARY_GAP_TOLERANCE_M",
     "DEFAULT_DANGLING_SNAP_TOLERANCE_M",
     "DEFAULT_DUPLICATE_VERTEX_TOLERANCE_M",
+    "DEFAULT_OVERLAP_THRESHOLD_PERCENT",
     "DanglingNodeAnomaly",
     "DuplicateVertexAnomaly",
     "build_dangling_node_detection_query",
     "build_duplicate_vertex_detection_query",
+    "classify_topology_severity",
     "detect_dangling_nodes",
     "detect_duplicate_vertices",
     "detect_layer_duplicate_vertices",
