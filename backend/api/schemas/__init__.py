@@ -85,6 +85,12 @@ from backend.api.schemas.geodetic import (
     ValidateTopologyBatchResponse,
 )
 from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
+from backend.api.schemas.topology import (
+    TopologyErrorFeature,
+    TopologyErrorFeatureCollection,
+    TopologyErrorProperties,
+    build_topology_error_feature_collection,
+)
 
 __all__ = [
     "AlignmentHintSchema",
@@ -169,5 +175,9 @@ __all__ = [
     "EncroachmentEvaluateRequest",
     "EncroachmentResultSchema",
     "TemporalChangeSchema",
+    "TopologyErrorFeature",
+    "TopologyErrorFeatureCollection",
+    "TopologyErrorProperties",
+    "build_topology_error_feature_collection",
 ]
 

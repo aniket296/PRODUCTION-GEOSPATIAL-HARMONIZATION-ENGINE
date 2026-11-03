@@ -24,10 +24,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
+from backend.api.schemas.topology import (
+    TopologyErrorFeatureCollection,
+    build_topology_error_feature_collection,
+)
 from backend.core.config import get_settings
 from backend.db.session import get_async_session
 from backend.ingestion.validation import UploadValidator
 from backend.models.layer import LayerStatus, RawCadastralLayer
+from backend.models.topology import TopologicalError, TopologyErrorType, TopologySeverity
 from backend.worker.celery_app import process_cadastral_layer_task
 
 logger = logging.getLogger(__name__)
@@ -303,4 +308,48 @@ async def get_layer_status(
         updated_at=layer.updated_at,
         metadata=layer.metadata_json,
     )
+
+
+@router.get(
+    "/{layer_id}/topology-errors",
+    response_model=TopologyErrorFeatureCollection,
+    summary="Get detected topological errors for a cadastral layer as an RFC 7946 GeoJSON FeatureCollection",
+)
+async def get_layer_topology_errors(
+    layer_id: uuid.UUID,
+    severity: Optional[TopologySeverity] = None,
+    error_type: Optional[TopologyErrorType] = None,
+    is_resolved: Optional[bool] = None,
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> TopologyErrorFeatureCollection:
+    """Return all or filtered topological conflict records for `layer_id` as an RFC 7946 GeoJSON FeatureCollection."""
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable",
+        )
+
+    layer_stmt = select(RawCadastralLayer).where(RawCadastralLayer.id == layer_id)
+    layer_res = await session.execute(layer_stmt)
+    layer = layer_res.scalar_one_or_none()
+    if layer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cadastral layer {layer_id} not found",
+        )
+
+    err_stmt = select(TopologicalError).where(TopologicalError.layer_id == layer_id)
+    if severity is not None:
+        err_stmt = err_stmt.where(TopologicalError.severity == severity.value)
+    if error_type is not None:
+        err_stmt = err_stmt.where(TopologicalError.error_type == error_type.value)
+    if is_resolved is not None:
+        err_stmt = err_stmt.where(TopologicalError.is_resolved.is_(is_resolved))
+    err_stmt = err_stmt.order_by(TopologicalError.created_at, TopologicalError.id)
+
+    err_res = await session.execute(err_stmt)
+    errors = list(err_res.scalars().all())
+
+    return build_topology_error_feature_collection(layer_id=layer_id, errors=errors)
+
 
