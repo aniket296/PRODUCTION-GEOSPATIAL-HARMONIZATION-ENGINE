@@ -34,6 +34,12 @@ from backend.topology.overlap_percentage import (
     evaluate_pair_overlap_metrics,
     overlap_percentage_expr,
 )
+from backend.topology.recorder import (
+    WGS84_SRID,
+    TopologyConflictRecorder,
+    TopologyRecordingSummary,
+    project_metric_geometry_to_wgs84,
+)
 from backend.topology.severity import (
     DEFAULT_OVERLAP_THRESHOLD_PERCENT,
     classify_topology_severity,
@@ -82,11 +88,14 @@ __all__ = [
     "DEFAULT_SLIVER_MAX_POLSBY_POPPER",
     "FOUR_PI",
     "PROJECTED_SRID",
+    "WGS84_SRID",
     "BoundaryGapCandidate",
     "CompactnessMetrics",
     "OverlapCandidate",
     "OverlapPercentageMetrics",
     "SliverEvaluationResult",
+    "TopologyConflictRecorder",
+    "TopologyRecordingSummary",
     "build_boundary_gap_detection_query",
     "build_pairwise_intersection_query",
     "build_pairwise_overlap_percentage_query",
@@ -110,5 +119,6 @@ __all__ = [
     "overlap_percentage_expr",
     "pairwise_gap_geometry_expr",
     "polsby_popper_expr",
+    "project_metric_geometry_to_wgs84",
     "sliver_predicate_expr",
 ]
