@@ -1,5 +1,16 @@
 """Deterministic cadastral topology healing (sliver assignment, micro-overlap resolution, snapping)."""
 
+from backend.healing.dispute_protection import (
+    CriticalDisputePair,
+    DisputeCandidateInput,
+    DisputedGeometryModifiedError,
+    DisputeProtectionResult,
+    apply_dispute_locks,
+    assert_locked_geometries_preserved,
+    detect_critical_disputes,
+    filter_healable_parcels,
+    snapshot_locked_geometries,
+)
 from backend.healing.micro_overlap import (
     MicroOverlapBatchResult,
     MicroOverlapCandidateInput,
@@ -29,6 +40,15 @@ from backend.healing.sliver_union import (
 )
 
 __all__ = [
+    "CriticalDisputePair",
+    "DisputeCandidateInput",
+    "DisputeProtectionResult",
+    "DisputedGeometryModifiedError",
+    "apply_dispute_locks",
+    "assert_locked_geometries_preserved",
+    "detect_critical_disputes",
+    "filter_healable_parcels",
+    "snapshot_locked_geometries",
     "MicroOverlapBatchResult",
     "MicroOverlapCandidateInput",
     "MicroOverlapSplitResult",
