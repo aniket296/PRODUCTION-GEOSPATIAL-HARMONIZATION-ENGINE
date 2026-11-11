@@ -41,6 +41,15 @@ from backend.healing.micro_overlap import (
     heal_micro_overlaps,
     resolve_pair_micro_overlap,
 )
+from backend.healing.orchestrator import (
+    HealingPipelineResult,
+    HealingTransactionRollbackError,
+    ParcelStateSnapshot,
+    capture_parcel_snapshots,
+    execute_healing_transaction,
+    execute_layer_healing_pipeline,
+    restore_parcel_snapshots,
+)
 from backend.healing.shared_boundary import (
     SharedBoundaryCandidateInput,
     SharedBoundaryMatch,
@@ -62,6 +71,13 @@ from backend.healing.sliver_union import (
 )
 
 __all__ = [
+    "HealingPipelineResult",
+    "HealingTransactionRollbackError",
+    "ParcelStateSnapshot",
+    "capture_parcel_snapshots",
+    "execute_healing_transaction",
+    "execute_layer_healing_pipeline",
+    "restore_parcel_snapshots",
     "BoundarySnapBatchResult",
     "BoundarySnapResult",
     "SnapCandidateInput",
