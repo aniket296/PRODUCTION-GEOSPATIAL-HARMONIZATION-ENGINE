@@ -82,8 +82,8 @@ def _cand(pid: uuid.UUID, poly: Polygon, *, locked: bool = False) -> SnapCandida
 
 
 def _self_intersection_bait() -> Polygon:
-    """Valid sliver east of the West edge; snapping (100.1, 0)->(100, 0) and (100.15, 100)->(100, 100) twists it."""
-    return Polygon([(100.1, 0.0), (100.2, 100.0), (100.15, 100.0), (100.12, 0.1), (100.1, 0.0)])
+    """Valid sliver beside West's NE corner; snapping (100.13, 99.93)->(100, 100) makes the ring self-intersect."""
+    return Polygon([(100.01, 99.73), (100.24, 100.46), (100.48, 99.89), (100.13, 99.93), (100.01, 99.73)])
 
 
 class TestMeasureDisplacement:

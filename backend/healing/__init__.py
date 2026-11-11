@@ -1,5 +1,17 @@
 """Deterministic cadastral topology healing (sliver assignment, micro-overlap resolution, snapping)."""
 
+from backend.healing.boundary_snap import (
+    BoundarySnapBatchResult,
+    BoundarySnapResult,
+    SnapCandidateInput,
+    SnapValidityError,
+    boundary_snap_geometry_expr,
+    measure_max_displacement_m,
+    snap_geometry_to_reference,
+    snap_layer_boundaries,
+    snap_parcel_boundaries,
+)
+
 from backend.healing.dispute_protection import (
     CriticalDisputePair,
     DisputeCandidateInput,
@@ -40,6 +52,15 @@ from backend.healing.sliver_union import (
 )
 
 __all__ = [
+    "BoundarySnapBatchResult",
+    "BoundarySnapResult",
+    "SnapCandidateInput",
+    "SnapValidityError",
+    "boundary_snap_geometry_expr",
+    "measure_max_displacement_m",
+    "snap_geometry_to_reference",
+    "snap_layer_boundaries",
+    "snap_parcel_boundaries",
     "CriticalDisputePair",
     "DisputeCandidateInput",
     "DisputeProtectionResult",
