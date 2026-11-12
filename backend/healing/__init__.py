@@ -69,6 +69,13 @@ from backend.healing.sliver_union import (
     heal_slivers,
     sliver_union_geometry_expr,
 )
+from backend.healing.verification import (
+    DEFAULT_RESOLVED_BY,
+    PostResolutionVerificationError,
+    PostResolutionVerificationResult,
+    verify_and_audit_healing,
+    verify_layer_post_resolution,
+)
 
 __all__ = [
     "HealingPipelineResult",
@@ -125,4 +132,9 @@ __all__ = [
     "shared_boundary_geometry_expr",
     "shared_boundary_length_expr",
     "sliver_union_geometry_expr",
+    "DEFAULT_RESOLVED_BY",
+    "PostResolutionVerificationError",
+    "PostResolutionVerificationResult",
+    "verify_and_audit_healing",
+    "verify_layer_post_resolution",
 ]

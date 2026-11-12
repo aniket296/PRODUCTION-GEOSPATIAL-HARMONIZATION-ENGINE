@@ -104,8 +104,7 @@ class TestPostResolutionVerificationAndAudit:
         p_s = _orm(ID_S, "S", _rect(-0.1, 0.0, 0.0, 40.0, DX, DY), sliver=True)
 
         recorder = TopologyConflictRecorder()
-        summary = recorder.build_layer_errors(LAYER_ID, [p_a, p_b, p_s])
-        errors = list(summary.errors)
+        errors = recorder.build_layer_errors(LAYER_ID, [p_a, p_b, p_s])
         for err in errors:
             if err.id is None:
                 err.id = uuid.uuid4()
