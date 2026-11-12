@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from geoalchemy2.shape import to_shape
@@ -147,3 +148,78 @@ def build_topology_error_feature_collection(
         bbox=bbox,
         features=features,
     )
+
+
+class AutoResolveRequest(BaseModel):
+    """Optional configuration overrides when triggering deterministic layer auto-resolution."""
+
+    resolved_by: str = Field(
+        default="auto-healing-engine",
+        min_length=1,
+        max_length=100,
+        description="Actor or subsystem identifier stamped onto resolved audit records",
+    )
+    strict_verification: bool = Field(
+        default=True,
+        description="Abort and roll back transaction if any AUTO_RESOLVABLE defect remains post-healing",
+    )
+
+
+class AutoResolveResponse(BaseModel):
+    """Summary of atomic topological healing and post-resolution verification for a cadastral layer."""
+
+    layer_id: str = Field(description="UUID of the healed cadastral layer")
+    status: Literal["COMPLETED", "COMPLETED_WITH_DISPUTES"] = Field(
+        description="Overall healing outcome (disputes preserved separately when present)"
+    )
+    total_parcels: int = Field(default=0, ge=0, description="Total parcel records evaluated in the layer")
+    healed_parcel_count: int = Field(default=0, ge=0, description="Parcels transitioned to AUTO_RESOLVED")
+    slivers_merged_count: int = Field(default=0, ge=0, description="Metric slivers merged into adjacent neighbors")
+    micro_overlaps_resolved_count: int = Field(
+        default=0,
+        ge=0,
+        description="Pairwise micro-overlaps resolved by centerline splitting",
+    )
+    boundaries_snapped_count: int = Field(
+        default=0,
+        ge=0,
+        description="Parcels snapped to close sub-tolerance boundary gaps",
+    )
+    grid_normalized_count: int = Field(
+        default=0,
+        ge=0,
+        description="Parcels normalized to the metric 1 mm coordinate grid",
+    )
+    resolved_errors_count: int = Field(
+        default=0,
+        ge=0,
+        description="Pre-existing AUTO_RESOLVABLE TopologicalError rows stamped as resolved",
+    )
+    remaining_disputes_count: int = Field(
+        default=0,
+        ge=0,
+        description="Unresolved CRITICAL_DISPUTE records preserved with locked geometries",
+    )
+    residual_auto_resolvable_count: int = Field(
+        default=0,
+        ge=0,
+        description="Remaining AUTO_RESOLVABLE defects detected during post-resolution check",
+    )
+    dispute_locked_parcel_ids: List[str] = Field(
+        default_factory=list,
+        description="Sorted parcel UUIDs locked due to critical boundary disputes",
+    )
+    auto_resolved_parcel_ids: List[str] = Field(
+        default_factory=list,
+        description="Sorted parcel UUIDs transitioned to AUTO_RESOLVED",
+    )
+    resolved_error_ids: List[str] = Field(
+        default_factory=list,
+        description="Sorted TopologicalError UUIDs stamped as resolved",
+    )
+    remaining_dispute_error_ids: List[str] = Field(
+        default_factory=list,
+        description="Sorted CRITICAL_DISPUTE TopologicalError UUIDs left unresolved",
+    )
+    verified_at: datetime = Field(description="UTC timestamp when post-resolution verification completed")
+

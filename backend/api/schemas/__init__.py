@@ -86,6 +86,8 @@ from backend.api.schemas.geodetic import (
 )
 from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
 from backend.api.schemas.topology import (
+    AutoResolveRequest,
+    AutoResolveResponse,
     TopologyErrorFeature,
     TopologyErrorFeatureCollection,
     TopologyErrorProperties,
@@ -175,6 +177,8 @@ __all__ = [
     "EncroachmentEvaluateRequest",
     "EncroachmentResultSchema",
     "TemporalChangeSchema",
+    "AutoResolveRequest",
+    "AutoResolveResponse",
     "TopologyErrorFeature",
     "TopologyErrorFeatureCollection",
     "TopologyErrorProperties",

@@ -12,6 +12,7 @@ from typing import Optional
 
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
     Form,
@@ -25,13 +26,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
 from backend.api.schemas.topology import (
+    AutoResolveRequest,
+    AutoResolveResponse,
     TopologyErrorFeatureCollection,
     build_topology_error_feature_collection,
 )
 from backend.core.config import get_settings
 from backend.db.session import get_async_session
+from backend.healing.orchestrator import (
+    HealingTransactionRollbackError,
+    capture_parcel_snapshots,
+    execute_healing_transaction,
+    restore_parcel_snapshots,
+)
+from backend.healing.verification import (
+    DEFAULT_RESOLVED_BY,
+    PostResolutionVerificationError,
+    verify_layer_post_resolution,
+)
 from backend.ingestion.validation import UploadValidator
 from backend.models.layer import LayerStatus, RawCadastralLayer
+from backend.models.parcel import HarmonizedParcel
 from backend.models.topology import TopologicalError, TopologyErrorType, TopologySeverity
 from backend.worker.celery_app import process_cadastral_layer_task
 
@@ -351,5 +366,107 @@ async def get_layer_topology_errors(
     errors = list(err_res.scalars().all())
 
     return build_topology_error_feature_collection(layer_id=layer_id, errors=errors)
+
+
+@router.post(
+    "/{layer_id}/auto-resolve",
+    response_model=AutoResolveResponse,
+    summary="Atomically execute deterministic topological healing on a cadastral layer",
+)
+async def auto_resolve_layer_topology(
+    layer_id: uuid.UUID,
+    payload: Optional[AutoResolveRequest] = Body(default=None),
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> AutoResolveResponse:
+    """Run deterministic topological healing, verify post-resolution cleanliness, and commit audit updates."""
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable",
+        )
+
+    layer_stmt = select(RawCadastralLayer).where(RawCadastralLayer.id == layer_id)
+    layer_res = await session.execute(layer_stmt)
+    layer = layer_res.scalar_one_or_none()
+    if layer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cadastral layer {layer_id} not found",
+        )
+
+    parcel_stmt = (
+        select(HarmonizedParcel)
+        .where(HarmonizedParcel.layer_id == layer_id)
+        .order_by(HarmonizedParcel.id)
+    )
+    parcel_res = await session.execute(parcel_stmt)
+    parcels = list(parcel_res.scalars().all())
+
+    err_stmt = (
+        select(TopologicalError)
+        .where(TopologicalError.layer_id == layer_id)
+        .order_by(TopologicalError.created_at, TopologicalError.id)
+    )
+    err_res = await session.execute(err_stmt)
+    errors = list(err_res.scalars().all())
+
+    resolved_by = payload.resolved_by if payload is not None else DEFAULT_RESOLVED_BY
+    strict_verification = payload.strict_verification if payload is not None else True
+
+    snapshots = capture_parcel_snapshots(parcels)
+
+    try:
+        pipeline_result = await execute_healing_transaction(session, parcels)
+        verification = await verify_layer_post_resolution(
+            session,
+            parcels,
+            errors,
+            pipeline_result=pipeline_result,
+            resolved_by=resolved_by,
+            strict=strict_verification,
+        )
+    except HealingTransactionRollbackError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    except PostResolutionVerificationError as exc:
+        restore_parcel_snapshots(parcels, snapshots)
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+
+    await session.commit()
+
+    remaining_disputes_count = len(verification.remaining_dispute_error_ids) or (
+        1 if verification.residual_critical_dispute_count > 0 else 0
+    )
+    outcome_status = (
+        "COMPLETED_WITH_DISPUTES"
+        if remaining_disputes_count > 0 or len(pipeline_result.disputed_parcel_ids) > 0
+        else "COMPLETED"
+    )
+
+    return AutoResolveResponse(
+        layer_id=str(layer_id),
+        status=outcome_status,
+        total_parcels=len(parcels),
+        healed_parcel_count=len(pipeline_result.auto_resolved_parcel_ids),
+        slivers_merged_count=len(pipeline_result.sliver_result.assignments),
+        micro_overlaps_resolved_count=len(pipeline_result.micro_overlap_result.resolved_pairs),
+        boundaries_snapped_count=len(pipeline_result.snap_result.updated_geometries),
+        grid_normalized_count=len(pipeline_result.grid_result.updated_geometries),
+        resolved_errors_count=len(verification.resolved_error_ids),
+        remaining_disputes_count=len(verification.remaining_dispute_error_ids),
+        residual_auto_resolvable_count=verification.residual_auto_resolvable_count,
+        dispute_locked_parcel_ids=[str(pid) for pid in pipeline_result.disputed_parcel_ids],
+        auto_resolved_parcel_ids=[str(pid) for pid in pipeline_result.auto_resolved_parcel_ids],
+        resolved_error_ids=[str(eid) for eid in verification.resolved_error_ids],
+        remaining_dispute_error_ids=[str(eid) for eid in verification.remaining_dispute_error_ids],
+        verified_at=verification.verified_at,
+    )
+
 
 
