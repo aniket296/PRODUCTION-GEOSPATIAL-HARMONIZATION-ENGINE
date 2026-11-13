@@ -50,7 +50,9 @@ from backend.export.flatgeobuf import (
 )
 from backend.export.geojson import export_parcels_to_geojson_bytes
 from backend.export.geopackage import export_parcels_to_geopackage
+from backend.export.manifest import build_harmonization_audit_manifest
 from backend.export.staging import SUPPORTED_EXPORT_FORMATS, stage_harmonized_export
+from backend.models.topology import TopologicalError
 from backend.storage.minio_client import MinioStorageClient, get_storage_client
 from backend.healing.orchestrator import (
     HealingTransactionRollbackError,
@@ -785,6 +787,32 @@ async def presign_layer_export(
         feature_count=artifact.feature_count,
         expires_seconds=artifact.expires_seconds,
         cached=artifact.cached,
+    )
+
+
+@router.get(
+    "/{layer_id}/export/manifest",
+    summary="Get deterministic harmonization audit certificate & lineage manifest for a layer",
+)
+async def get_layer_export_manifest(
+    layer_id: uuid.UUID,
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> dict:
+    """Return the deterministic harmonization audit manifest JSON for `layer_id`."""
+    layer, parcels = await _load_layer_and_parcels(layer_id, session)
+    assert session is not None
+    err_stmt = (
+        select(TopologicalError)
+        .where(TopologicalError.layer_id == layer_id)
+        .order_by(TopologicalError.id)
+    )
+    err_res = await session.execute(err_stmt)
+    errors = list(err_res.scalars().all())
+
+    return build_harmonization_audit_manifest(
+        layer=layer,
+        parcels=parcels,
+        topology_errors=errors,
     )
 
 

@@ -14,6 +14,7 @@ from backend.api.app import app
 from backend.db.session import get_async_session
 from backend.models.layer import LayerStatus, RawCadastralLayer
 from backend.models.parcel import HarmonizedParcel, ParcelResolutionStatus
+from backend.models.topology import TopologicalError, TopologyErrorType, TopologySeverity
 from backend.storage.minio_client import get_storage_client
 from backend.topology.recorder import project_metric_geometry_to_wgs84
 
@@ -176,5 +177,46 @@ class TestLayerExportDownloadAndPresignAPI:
                 r2 = client.get(f"/api/v1/layers/{missing_id}/export?format=shapefile")
             assert r1.status_code == 404
             assert r2.status_code in (400, 422)
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_export_manifest_returns_audit_certificate_json(self) -> None:
+        layer_id = uuid.uuid4()
+        layer = _make_layer(layer_id)
+        parcels = [_make_parcel(layer_id, uuid.uuid4(), "P-14-03")]
+        poly = _rect(0.0, 0.0, 5.0, 5.0, dx=500_000.0, dy=3_000_000.0)
+        errors = [
+            TopologicalError(
+                id=uuid.uuid4(),
+                layer_id=layer_id,
+                error_type=TopologyErrorType.SLIVER.value,
+                severity=TopologySeverity.AUTO_RESOLVABLE.value,
+                error_geometry_wgs84=from_shape(project_metric_geometry_to_wgs84(poly), srid=4326),
+                error_geometry_projected=from_shape(poly, srid=32643),
+                is_resolved=True,
+                affected_area_sqm=25.0,
+            )
+        ]
+
+        session = AsyncMock()
+        layer_res = MagicMock()
+        layer_res.scalar_one_or_none.return_value = layer
+        parcel_res = MagicMock()
+        parcel_res.scalars.return_value.all.return_value = parcels
+        err_res = MagicMock()
+        err_res.scalars.return_value.all.return_value = errors
+        session.execute.side_effect = [layer_res, parcel_res, err_res]
+
+        try:
+            app.dependency_overrides[get_async_session] = lambda: session
+            with TestClient(app) as client:
+                resp = client.get(f"/api/v1/layers/{layer_id}/export/manifest")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["layer"]["layer_id"] == str(layer_id)
+            assert body["parcels"]["active_parcels"] == 1
+            assert body["topology"]["total_errors"] == 1
+            assert body["topology"]["resolved_errors"] == 1
+            assert len(body["manifest_sha256"]) == 64
         finally:
             app.dependency_overrides.clear()
