@@ -22,6 +22,11 @@ from backend.export.geopackage import (
     export_parcels_to_geopackage,
     read_geopackage_features,
 )
+from backend.export.manifest import (
+    AUDIT_MANIFEST_SCHEMA_VERSION,
+    build_harmonization_audit_manifest,
+    export_audit_manifest_bytes,
+)
 from backend.export.staging import (
     SUPPORTED_EXPORT_FORMATS,
     StagedExportArtifact,
@@ -30,6 +35,7 @@ from backend.export.staging import (
 )
 
 __all__ = [
+    "AUDIT_MANIFEST_SCHEMA_VERSION",
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_COORDINATE_PRECISION",
     "FlatGeobufExportMetadata",
@@ -41,6 +47,8 @@ __all__ = [
     "build_export_object_name",
     "build_flatgeobuf_metadata",
     "build_geopackage_metadata",
+    "build_harmonization_audit_manifest",
+    "export_audit_manifest_bytes",
     "export_parcels_to_flatgeobuf",
     "export_parcels_to_geojson_bytes",
     "export_parcels_to_geojson_dict",

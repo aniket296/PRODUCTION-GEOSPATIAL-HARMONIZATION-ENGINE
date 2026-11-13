@@ -16,9 +16,9 @@ from backend.export.manifest import (
 from backend.models.layer import LayerStatus, RawCadastralLayer
 from backend.models.parcel import HarmonizedParcel, ParcelResolutionStatus
 from backend.models.topology import (
-    ErrorSeverity,
-    TopologyError,
+    TopologicalError,
     TopologyErrorType,
+    TopologySeverity,
 )
 from backend.topology.recorder import project_metric_geometry_to_wgs84
 
@@ -66,16 +66,19 @@ def _make_parcel(
 def _make_error(
     layer_id: uuid.UUID,
     err_type: TopologyErrorType,
-    severity: ErrorSeverity,
+    severity: TopologySeverity,
     resolved: bool,
-) -> TopologyError:
-    return TopologyError(
+) -> TopologicalError:
+    poly = Polygon([(500000, 3000000), (500002, 3000000), (500002, 3000002), (500000, 3000002), (500000, 3000000)])
+    return TopologicalError(
         id=uuid.uuid4(),
         layer_id=layer_id,
         error_type=err_type.value,
         severity=severity.value,
+        error_geometry_wgs84=from_shape(project_metric_geometry_to_wgs84(poly), srid=4326),
+        error_geometry_projected=from_shape(poly, srid=32643),
         is_resolved=resolved,
-        error_area_sqm=1.25,
+        affected_area_sqm=1.25,
     )
 
 
@@ -91,9 +94,9 @@ class TestHarmonizationAuditManifest:
             _make_parcel(layer_id, "P-SLIVER", disputed=False, merged=True),
         ]
         errors = [
-            _make_error(layer_id, TopologyErrorType.SLIVER, ErrorSeverity.LOW, resolved=True),
-            _make_error(layer_id, TopologyErrorType.OVERLAP, ErrorSeverity.CRITICAL, resolved=False),
-            _make_error(layer_id, TopologyErrorType.GAP, ErrorSeverity.MEDIUM, resolved=True),
+            _make_error(layer_id, TopologyErrorType.SLIVER, TopologySeverity.AUTO_RESOLVABLE, resolved=True),
+            _make_error(layer_id, TopologyErrorType.OVERLAP, TopologySeverity.CRITICAL_DISPUTE, resolved=False),
+            _make_error(layer_id, TopologyErrorType.GAP, TopologySeverity.WARNING, resolved=True),
         ]
 
         manifest = build_harmonization_audit_manifest(
@@ -122,7 +125,7 @@ class TestHarmonizationAuditManifest:
         assert t_summary["unresolved_errors"] == 1
         assert t_summary["by_type"]["SLIVER"] == 1
         assert t_summary["by_type"]["OVERLAP"] == 1
-        assert t_summary["by_severity"]["CRITICAL"] == 1
+        assert t_summary["by_severity"]["CRITICAL_DISPUTE"] == 1
 
         assert manifest["artifacts"]["geojson"]["sha256"] == "a" * 64
         assert manifest["artifacts"]["gpkg"]["sha256"] == "b" * 64
@@ -133,8 +136,8 @@ class TestHarmonizationAuditManifest:
         layer = _make_layer(layer_id)
         p1 = _make_parcel(layer_id, "P-1")
         p2 = _make_parcel(layer_id, "P-2")
-        e1 = _make_error(layer_id, TopologyErrorType.SLIVER, ErrorSeverity.LOW, resolved=True)
-        e2 = _make_error(layer_id, TopologyErrorType.GAP, ErrorSeverity.MEDIUM, resolved=False)
+        e1 = _make_error(layer_id, TopologyErrorType.SLIVER, TopologySeverity.AUTO_RESOLVABLE, resolved=True)
+        e2 = _make_error(layer_id, TopologyErrorType.GAP, TopologySeverity.WARNING, resolved=False)
 
         b1 = export_audit_manifest_bytes(layer=layer, parcels=[p1, p2], topology_errors=[e1, e2])
         b2 = export_audit_manifest_bytes(layer=layer, parcels=[p2, p1], topology_errors=[e2, e1])
