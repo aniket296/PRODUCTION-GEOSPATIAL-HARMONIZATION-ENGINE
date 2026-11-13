@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import tempfile
 import uuid
@@ -16,11 +17,16 @@ from fastapi import (
     Depends,
     File,
     Form,
+    Header,
     HTTPException,
+    Query,
     Response,
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
+from geoalchemy2.shape import to_shape
+from shapely.geometry import box as shapely_box
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +39,10 @@ from backend.api.schemas.topology import (
 )
 from backend.core.config import get_settings
 from backend.db.session import get_async_session
+from backend.export.flatgeobuf import (
+    export_parcels_to_flatgeobuf,
+    stream_flatgeobuf_bytes,
+)
 from backend.healing.orchestrator import (
     HealingTransactionRollbackError,
     capture_parcel_snapshots,
@@ -466,6 +476,169 @@ async def auto_resolve_layer_topology(
         resolved_error_ids=[str(eid) for eid in verification.resolved_error_ids],
         remaining_dispute_error_ids=[str(eid) for eid in verification.remaining_dispute_error_ids],
         verified_at=verification.verified_at,
+    )
+
+
+def _parse_wgs84_bbox(bbox: Optional[str]) -> Optional[tuple[float, float, float, float]]:
+    """Parse and validate a comma-separated WGS 84 bounding box `min_lon,min_lat,max_lon,max_lat`."""
+    if bbox is None:
+        return None
+    parts = [part.strip() for part in bbox.split(",")]
+    if len(parts) != 4:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="bbox must contain 4 comma-separated coordinates: min_lon,min_lat,max_lon,max_lat",
+        )
+    try:
+        min_lon, min_lat, max_lon, max_lat = (float(p) for p in parts)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="bbox coordinates must be numeric floats",
+        ) from exc
+
+    if not all(math.isfinite(v) for v in (min_lon, min_lat, max_lon, max_lat)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="bbox coordinates must be finite numbers",
+        )
+    if min_lon > max_lon or min_lat > max_lat:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="bbox min coordinates must be <= max coordinates",
+        )
+    return (min_lon, min_lat, max_lon, max_lat)
+
+
+def _parse_byte_range(range_header: str, total_bytes: int) -> Optional[tuple[int, int]]:
+    """Parse a single HTTP `Range: bytes=...` header against `total_bytes`.
+
+    Returns `(start, end)` inclusive byte indices, or `None` when unsatisfiable/malformed.
+    """
+    if total_bytes <= 0 or not range_header.startswith("bytes="):
+        return None
+    spec = range_header[len("bytes=") :].strip()
+    if "," in spec or "-" not in spec:
+        return None
+
+    start_str, end_str = spec.split("-", 1)
+    start_str = start_str.strip()
+    end_str = end_str.strip()
+
+    try:
+        if start_str == "":
+            # Suffix range: bytes=-N
+            suffix_len = int(end_str)
+            if suffix_len <= 0:
+                return None
+            start = max(0, total_bytes - suffix_len)
+            end = total_bytes - 1
+            return (start, end)
+
+        start = int(start_str)
+        if start < 0 or start >= total_bytes:
+            return None
+
+        if end_str == "":
+            end = total_bytes - 1
+        else:
+            end = min(int(end_str), total_bytes - 1)
+
+        if end < start:
+            return None
+        return (start, end)
+    except ValueError:
+        return None
+
+
+@router.get(
+    "/{layer_id}/flatgeobuf",
+    summary="Stream a harmonized cadastral layer as FlatGeobuf with HTTP 206 Range Requests and bbox filtering",
+)
+async def stream_layer_flatgeobuf(
+    layer_id: uuid.UUID,
+    bbox: Optional[str] = Query(
+        default=None,
+        description="Optional WGS 84 bounding box filter: min_lon,min_lat,max_lon,max_lat",
+    ),
+    range_header: Optional[str] = Header(default=None, alias="Range"),
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> Response:
+    """Serialize `layer_id` parcels as FlatGeobuf and serve full (200) or partial (206) byte ranges."""
+    parsed_bbox = _parse_wgs84_bbox(bbox)
+
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable",
+        )
+
+    layer_stmt = select(RawCadastralLayer).where(RawCadastralLayer.id == layer_id)
+    layer_res = await session.execute(layer_stmt)
+    layer = layer_res.scalar_one_or_none()
+    if layer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cadastral layer {layer_id} not found",
+        )
+
+    parcel_stmt = (
+        select(HarmonizedParcel)
+        .where(HarmonizedParcel.layer_id == layer_id)
+        .order_by(HarmonizedParcel.id)
+    )
+    parcel_res = await session.execute(parcel_stmt)
+    parcels = list(parcel_res.scalars().all())
+
+    if parsed_bbox is not None:
+        bbox_geom = shapely_box(*parsed_bbox)
+        parcels = [
+            p
+            for p in parcels
+            if p.geometry_wgs84 is not None and to_shape(p.geometry_wgs84).intersects(bbox_geom)
+        ]
+
+    fgb_bytes = export_parcels_to_flatgeobuf(
+        parcels,
+        layer_name=layer.name or str(layer_id),
+    )
+    total = len(fgb_bytes)
+    common_headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'attachment; filename="{layer_id}.fgb"',
+    }
+
+    if range_header is not None:
+        byte_range = _parse_byte_range(range_header, total)
+        if byte_range is None:
+            return Response(
+                status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
+                headers={
+                    "Accept-Ranges": "bytes",
+                    "Content-Range": f"bytes */{total}",
+                },
+            )
+        start, end = byte_range
+        slice_bytes = fgb_bytes[start : end + 1]
+        return StreamingResponse(
+            stream_flatgeobuf_bytes(slice_bytes),
+            status_code=status.HTTP_206_PARTIAL_CONTENT,
+            media_type="application/vnd.flatgeobuf",
+            headers={
+                **common_headers,
+                "Content-Range": f"bytes {start}-{end}/{total}",
+                "Content-Length": str(len(slice_bytes)),
+            },
+        )
+
+    return StreamingResponse(
+        stream_flatgeobuf_bytes(fgb_bytes),
+        status_code=status.HTTP_200_OK,
+        media_type="application/vnd.flatgeobuf",
+        headers={
+            **common_headers,
+            "Content-Length": str(total),
+        },
     )
 
 
