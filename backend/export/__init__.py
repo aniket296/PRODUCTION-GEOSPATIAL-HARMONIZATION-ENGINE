@@ -9,13 +9,25 @@ from backend.export.flatgeobuf import (
     read_flatgeobuf_features,
     stream_flatgeobuf_bytes,
 )
+from backend.export.geopackage import (
+    GPKG_APPLICATION_ID,
+    GeoPackageExportMetadata,
+    build_geopackage_metadata,
+    export_parcels_to_geopackage,
+    read_geopackage_features,
+)
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
     "FlatGeobufExportMetadata",
+    "GPKG_APPLICATION_ID",
+    "GeoPackageExportMetadata",
     "WGS84_SRID",
     "build_flatgeobuf_metadata",
+    "build_geopackage_metadata",
     "export_parcels_to_flatgeobuf",
+    "export_parcels_to_geopackage",
     "read_flatgeobuf_features",
+    "read_geopackage_features",
     "stream_flatgeobuf_bytes",
 ]
