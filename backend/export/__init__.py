@@ -9,6 +9,18 @@ from backend.export.flatgeobuf import (
     read_flatgeobuf_features,
     stream_flatgeobuf_bytes,
 )
+from backend.export.geojson import (
+    DEFAULT_COORDINATE_PRECISION,
+    export_parcels_to_geojson_bytes,
+    export_parcels_to_geojson_dict,
+    signed_ring_area,
+)
+from backend.export.geojson import (
+    DEFAULT_COORDINATE_PRECISION,
+    export_parcels_to_geojson_bytes,
+    export_parcels_to_geojson_dict,
+    signed_ring_area,
+)
 from backend.export.geopackage import (
     GPKG_APPLICATION_ID,
     GeoPackageExportMetadata,
@@ -19,6 +31,7 @@ from backend.export.geopackage import (
 
 __all__ = [
     "DEFAULT_CHUNK_SIZE",
+    "DEFAULT_COORDINATE_PRECISION",
     "FlatGeobufExportMetadata",
     "GPKG_APPLICATION_ID",
     "GeoPackageExportMetadata",
@@ -26,8 +39,11 @@ __all__ = [
     "build_flatgeobuf_metadata",
     "build_geopackage_metadata",
     "export_parcels_to_flatgeobuf",
+    "export_parcels_to_geojson_bytes",
+    "export_parcels_to_geojson_dict",
     "export_parcels_to_geopackage",
     "read_flatgeobuf_features",
     "read_geopackage_features",
+    "signed_ring_area",
     "stream_flatgeobuf_bytes",
 ]
