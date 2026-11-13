@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -50,4 +50,51 @@ class LayerStatusResponse(BaseModel):
     created_at: datetime = Field(description="Layer submission timestamp")
     updated_at: Optional[datetime] = Field(default=None, description="Last status update timestamp")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional extraction and validation metadata")
+
+
+class LayerExportPresignRequest(BaseModel):
+    """Request payload for staging a harmonized export in MinIO and issuing a presigned URL."""
+
+    format: Literal["geojson", "gpkg", "fgb"] = Field(
+        default="gpkg",
+        description="Target export format: geojson, gpkg, or fgb",
+    )
+    srid: int = Field(
+        default=4326,
+        ge=1,
+        description="Target spatial reference ID (used for GeoPackage exports)",
+    )
+    include_merged_slivers: bool = Field(
+        default=False,
+        description="Whether to include merged audit sliver parcels in the export",
+    )
+    expires_seconds: int = Field(
+        default=3600,
+        ge=1,
+        le=604800,
+        description="Presigned URL lifetime in seconds",
+    )
+    force_rebuild: bool = Field(
+        default=False,
+        description="Rebuild and re-upload even if a cached artifact already exists in MinIO",
+    )
+
+
+class LayerExportPresignResponse(BaseModel):
+    """Presigned download URL and integrity metadata for a staged harmonized export."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    layer_id: str
+    format: str
+    bucket: str
+    object_name: str
+    download_url: str
+    content_type: str
+    byte_size: int
+    sha256: str
+    feature_count: int
+    expires_seconds: int
+    cached: bool = False
+
 

@@ -9,7 +9,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -30,7 +30,12 @@ from shapely.geometry import box as shapely_box
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.api.schemas.layer import LayerStatusResponse, LayerUploadResponse
+from backend.api.schemas.layer import (
+    LayerExportPresignRequest,
+    LayerExportPresignResponse,
+    LayerStatusResponse,
+    LayerUploadResponse,
+)
 from backend.api.schemas.topology import (
     AutoResolveRequest,
     AutoResolveResponse,
@@ -43,6 +48,10 @@ from backend.export.flatgeobuf import (
     export_parcels_to_flatgeobuf,
     stream_flatgeobuf_bytes,
 )
+from backend.export.geojson import export_parcels_to_geojson_bytes
+from backend.export.geopackage import export_parcels_to_geopackage
+from backend.export.staging import SUPPORTED_EXPORT_FORMATS, stage_harmonized_export
+from backend.storage.minio_client import MinioStorageClient, get_storage_client
 from backend.healing.orchestrator import (
     HealingTransactionRollbackError,
     capture_parcel_snapshots,
@@ -640,6 +649,144 @@ async def stream_layer_flatgeobuf(
             "Content-Length": str(total),
         },
     )
+
+
+async def _load_layer_and_parcels(
+    layer_id: uuid.UUID,
+    session: Optional[AsyncSession],
+) -> tuple[RawCadastralLayer, list[HarmonizedParcel]]:
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database service unavailable",
+        )
+
+    layer_stmt = select(RawCadastralLayer).where(RawCadastralLayer.id == layer_id)
+    layer_res = await session.execute(layer_stmt)
+    layer = layer_res.scalar_one_or_none()
+    if layer is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Cadastral layer {layer_id} not found",
+        )
+
+    parcel_stmt = (
+        select(HarmonizedParcel)
+        .where(HarmonizedParcel.layer_id == layer_id)
+        .order_by(HarmonizedParcel.id)
+    )
+    parcel_res = await session.execute(parcel_stmt)
+    parcels = list(parcel_res.scalars().all())
+    return layer, parcels
+
+
+@router.get(
+    "/{layer_id}/export",
+    summary="Download a harmonized cadastral layer as GeoJSON, GeoPackage, or FlatGeobuf",
+)
+async def download_layer_export(
+    layer_id: uuid.UUID,
+    format: Literal["geojson", "gpkg", "fgb"] = Query(
+        default="geojson",
+        description="Export format: geojson, gpkg, or fgb",
+    ),
+    srid: int = Query(
+        default=4326,
+        ge=1,
+        description="Target SRID for GeoPackage export",
+    ),
+    include_merged_slivers: bool = Query(
+        default=False,
+        description="Include merged audit slivers in exported output",
+    ),
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> Response:
+    """Serialize and stream a harmonized cadastral layer as a downloadable file."""
+    layer, parcels = await _load_layer_and_parcels(layer_id, session)
+    layer_slug = (layer.name or str(layer_id)).strip().replace(" ", "_").lower() or str(layer_id)
+    fmt_meta = SUPPORTED_EXPORT_FORMATS[format]
+
+    if format == "geojson":
+        payload = export_parcels_to_geojson_bytes(
+            parcels,
+            include_merged_slivers=include_merged_slivers,
+        )
+    elif format == "gpkg":
+        try:
+            payload = export_parcels_to_geopackage(
+                parcels,
+                table_name=layer_slug,
+                srid=srid,
+                include_merged_slivers=include_merged_slivers,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+    else:
+        payload = export_parcels_to_flatgeobuf(
+            parcels,
+            layer_name=layer_slug,
+            include_merged_slivers=include_merged_slivers,
+        )
+
+    filename = f"{layer_slug}_harmonized.{fmt_meta['ext']}"
+    return Response(
+        content=payload,
+        media_type=fmt_meta["content_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(payload)),
+        },
+    )
+
+
+@router.post(
+    "/{layer_id}/export/presign",
+    response_model=LayerExportPresignResponse,
+    summary="Stage a harmonized layer export in MinIO and return a presigned download URL",
+)
+async def presign_layer_export(
+    layer_id: uuid.UUID,
+    request: LayerExportPresignRequest = Body(default_factory=LayerExportPresignRequest),
+    session: Optional[AsyncSession] = Depends(get_async_session),
+    storage_client: MinioStorageClient = Depends(get_storage_client),
+) -> LayerExportPresignResponse:
+    """Stage a harmonized layer export in MinIO and issue a presigned download URL."""
+    layer, parcels = await _load_layer_and_parcels(layer_id, session)
+    try:
+        artifact = stage_harmonized_export(
+            layer_id=layer_id,
+            layer_name=layer.name or str(layer_id),
+            parcels=parcels,
+            export_format=request.format,
+            storage_client=storage_client,
+            srid=request.srid,
+            include_merged_slivers=request.include_merged_slivers,
+            expires_seconds=request.expires_seconds,
+            force_rebuild=request.force_rebuild,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    return LayerExportPresignResponse(
+        layer_id=str(layer_id),
+        format=artifact.format,
+        bucket=artifact.bucket,
+        object_name=artifact.object_name,
+        download_url=artifact.download_url,
+        content_type=artifact.content_type,
+        byte_size=artifact.byte_size,
+        sha256=artifact.sha256,
+        feature_count=artifact.feature_count,
+        expires_seconds=artifact.expires_seconds,
+        cached=artifact.cached,
+    )
+
 
 
 
