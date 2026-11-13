@@ -16,7 +16,7 @@ from backend.export.staging import (
     StagedExportArtifact,
     stage_harmonized_export,
 )
-from backend.models.parcel import CadastralParcel
+from backend.models.parcel import HarmonizedParcel, ParcelResolutionStatus
 
 
 def _make_parcel(
@@ -25,18 +25,23 @@ def _make_parcel(
     coords: list[tuple[float, float]],
     *,
     is_merged: bool = False,
-) -> CadastralParcel:
-    mp = MultiPolygon([Polygon(coords)])
-    return CadastralParcel(
+) -> HarmonizedParcel:
+    poly = Polygon(coords)
+    mp = MultiPolygon([poly])
+    return HarmonizedParcel(
         id=uuid.uuid4(),
         layer_id=layer_id,
-        parcel_id=parcel_id,
+        parcel_identifier=parcel_id,
         geometry_wgs84=from_shape(mp, srid=4326),
-        area_sqm=1000.0,
-        area_delta_pct=0.25,
-        topology_flag=None,
-        is_merged=is_merged,
-        attributes={"owner": "Govt", "ward": 4},
+        geometry_projected=from_shape(mp, srid=32643),
+        metric_area_sqm=1000.0,
+        metric_perimeter_m=120.0,
+        polsby_popper_compactness=0.78,
+        is_sliver=is_merged,
+        is_disputed=False,
+        dispute_locked=False,
+        resolution_status=ParcelResolutionStatus.AUTO_RESOLVED.value,
+        attributes={"owner": "Govt", "ward": 4, **({"merged_into_parcel_id": "P-100"} if is_merged else {})},
     )
 
 
