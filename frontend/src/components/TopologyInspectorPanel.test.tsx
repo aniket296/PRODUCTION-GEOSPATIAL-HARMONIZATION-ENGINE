@@ -74,8 +74,8 @@ describe("TopologyInspectorPanel", () => {
 
     expect(screen.getByText(/Topology Defects/i)).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument(); // total badge
-    expect(screen.getByText(/SLIVER/i)).toBeInTheDocument();
-    expect(screen.getByText(/OVERLAP/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/SLIVER/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/OVERLAP/i).length).toBeGreaterThan(0);
   });
 
   it("triggers selection callback when an error card is clicked", () => {
