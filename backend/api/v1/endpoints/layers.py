@@ -44,6 +44,7 @@ from backend.api.schemas.topology import (
 )
 from backend.core.config import get_settings
 from backend.db.session import get_async_session
+from backend.export.bundle import build_harmonization_release_bundle
 from backend.export.flatgeobuf import (
     export_parcels_to_flatgeobuf,
     stream_flatgeobuf_bytes,
@@ -813,6 +814,59 @@ async def get_layer_export_manifest(
         layer=layer,
         parcels=parcels,
         topology_errors=errors,
+    )
+
+
+@router.get(
+    "/{layer_id}/export/bundle",
+    summary="Download a deterministic ZIP bundle containing GeoJSON, GeoPackage, FlatGeobuf, and audit manifest",
+)
+async def download_layer_export_bundle(
+    layer_id: uuid.UUID,
+    srid: int = Query(
+        default=4326,
+        ge=1,
+        description="Target SRID for GeoPackage inside the release bundle",
+    ),
+    include_merged_slivers: bool = Query(
+        default=False,
+        description="Include merged audit slivers in exported artifacts",
+    ),
+    session: Optional[AsyncSession] = Depends(get_async_session),
+) -> Response:
+    """Build and return a multi-format harmonization release bundle (.zip)."""
+    layer, parcels = await _load_layer_and_parcels(layer_id, session)
+    assert session is not None
+    err_stmt = (
+        select(TopologicalError)
+        .where(TopologicalError.layer_id == layer_id)
+        .order_by(TopologicalError.id)
+    )
+    err_res = await session.execute(err_stmt)
+    errors = list(err_res.scalars().all())
+
+    try:
+        zip_bytes = build_harmonization_release_bundle(
+            layer=layer,
+            parcels=parcels,
+            topology_errors=errors,
+            srid=srid,
+            include_merged_slivers=include_merged_slivers,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+    slug = (layer.name or str(layer_id)).strip().replace(" ", "_").lower() or str(layer_id)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{slug}_release_bundle.zip"',
+            "Content-Length": str(len(zip_bytes)),
+        },
     )
 
 

@@ -1,5 +1,6 @@
 """Harmonized cadastral geospatial export utilities (FlatGeobuf, GeoPackage, RFC 7946 GeoJSON)."""
 
+from backend.export.bundle import build_harmonization_release_bundle
 from backend.export.flatgeobuf import (
     DEFAULT_CHUNK_SIZE,
     WGS84_SRID,
@@ -48,6 +49,7 @@ __all__ = [
     "build_flatgeobuf_metadata",
     "build_geopackage_metadata",
     "build_harmonization_audit_manifest",
+    "build_harmonization_release_bundle",
     "export_audit_manifest_bytes",
     "export_parcels_to_flatgeobuf",
     "export_parcels_to_geojson_bytes",
