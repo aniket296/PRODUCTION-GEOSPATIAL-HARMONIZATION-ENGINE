@@ -226,3 +226,24 @@ class TestMinIOServiceSmoke:
             sh = f.read()
         assert "cadastral-raw" in sh
         assert "cadastral-harmonized" in sh
+
+
+class TestFrontendServiceSmoke:
+    """Smoke test for React/Vite frontend container and Nginx reverse proxy."""
+
+    def test_frontend_service_and_nginx_config(self, compose_config):
+        services = compose_config.get("services", {})
+        assert "frontend" in services, "Frontend service missing from docker-compose.yml"
+        fe = services["frontend"]
+        build_cfg = fe.get("build", {})
+        assert "docker/frontend/Dockerfile" in build_cfg.get("dockerfile", "")
+        assert build_cfg.get("target") == "runtime"
+
+        fe_dockerfile = PROJECT_ROOT / "docker" / "frontend" / "Dockerfile"
+        fe_nginx = PROJECT_ROOT / "docker" / "frontend" / "nginx.conf"
+        assert fe_dockerfile.exists()
+        assert fe_nginx.exists()
+        nginx_text = fe_nginx.read_text(encoding="utf-8")
+        assert "proxy_pass http://backend:8000/api/;" in nginx_text
+        assert "Range" in nginx_text
+

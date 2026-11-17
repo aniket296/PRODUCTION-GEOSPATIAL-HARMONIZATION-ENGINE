@@ -171,6 +171,18 @@ services:
       minio:
         condition: service_healthy
 
+  frontend:
+    <<: *service-defaults
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      target: runtime
+    container_name: cadastre_frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
 # Isolated High-Performance Cadastral Network
 networks:
   cadastre_net:
