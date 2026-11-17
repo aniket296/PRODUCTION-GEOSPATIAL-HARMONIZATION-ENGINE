@@ -42,5 +42,33 @@ The **Geospatial Harmonization Engine** is an enterprise-grade, offline-first ge
 ├── docs/                 # System architecture, geodetic parameters, API specs
 ├── fixtures/             # Deterministic synthetic test fixtures
 ├── frontend/             # React + Vite + MapLibre GL JS UI
-└── scripts/              # Operational and maintenance automation
+├── scripts/              # Operational and maintenance automation
+└── tests/                # Full-stack TDD unit, API, and E2E verification suite
 ```
+
+## 5. REST API Reference (`/api/v1`)
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/api/v1/layers/upload` | Ingest a raw cadastral survey (`.geojson`, `.dxf`, `.shp`/`.zip`, `.gpkg`, `.tif`) |
+| `GET` | `/api/v1/layers/{layer_id}/status` | Retrieve ingestion lifecycle stage, progress percentage, and CRS metadata |
+| `GET` | `/api/v1/layers/{layer_id}/topology-errors` | Fetch detected topological defects as an RFC 7946 GeoJSON `FeatureCollection` |
+| `POST` | `/api/v1/layers/{layer_id}/auto-resolve` | Atomically execute deterministic topological healing with dispute protection |
+| `GET` | `/api/v1/layers/{layer_id}/flatgeobuf` | Stream harmonized parcels as FlatGeobuf (`HTTP 200` / `206 Partial Content` + `bbox`) |
+| `GET` | `/api/v1/layers/{layer_id}/export` | Direct download in `geojson`, `gpkg` (`srid=4326` or `32643`), or `fgb` |
+| `POST` | `/api/v1/layers/{layer_id}/export/presign` | Stage harmonized artifact in MinIO (`cadastral-harmonized`) and issue presigned URL |
+| `GET` | `/api/v1/layers/{layer_id}/export/manifest` | Generate cryptographic SHA-256 harmonization audit certificate JSON |
+| `GET` | `/api/v1/layers/{layer_id}/export/bundle` | Download deterministic multi-format release bundle (`.zip`) |
+
+## 6. Verification & Local Development
+
+```powershell
+# Backend Python Test Suite
+.\.venv\Scripts\pytest -p no:asyncio -v
+
+# Frontend Vitest + Production Build
+Set-Location frontend
+npm test
+npm run build
+```
+
