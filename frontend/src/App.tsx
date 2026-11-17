@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AutoResolveBanner } from "@/components/AutoResolveBanner";
 import { DifferentialMapCanvas } from "@/components/DifferentialMapCanvas";
+import { EdgeSyncStatusBar } from "@/components/EdgeSyncStatusBar";
 import { ExportModal } from "@/components/ExportModal";
 import { GeodeticAuditCard } from "@/components/GeodeticAuditCard";
 import { LayerUploadPanel } from "@/components/LayerUploadPanel";
@@ -207,6 +208,14 @@ export function App() {
         stagedExport={stagedExport}
         auditManifest={auditManifest}
         isStaging={isStagingExport}
+      />
+
+      <EdgeSyncStatusBar
+        healthyWorkers={activeLayerId ? 1 : 0}
+        totalWorkers={activeLayerId ? 1 : 0}
+        pendingDeltas={0}
+        conflictCount={0}
+        onRefresh={() => {}}
       />
     </div>
   );
