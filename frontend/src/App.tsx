@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AutoResolveBanner } from "@/components/AutoResolveBanner";
 import { DifferentialMapCanvas } from "@/components/DifferentialMapCanvas";
 import { ExportModal } from "@/components/ExportModal";
+import { GeodeticAuditCard } from "@/components/GeodeticAuditCard";
 import { LayerUploadPanel } from "@/components/LayerUploadPanel";
 import { ParcelDetailCard } from "@/components/ParcelDetailCard";
 import { TopologyInspectorPanel } from "@/components/TopologyInspectorPanel";
@@ -159,6 +160,11 @@ export function App() {
           <ParcelDetailCard
             parcel={selectedParcel}
             onClear={() => setSelectedParcelId(null)}
+          />
+          <GeodeticAuditCard
+            sourceCrs={layerStatus?.detected_crs}
+            targetCrs="EPSG:4326"
+            metadata={layerStatus?.metadata ?? null}
           />
         </section>
 
