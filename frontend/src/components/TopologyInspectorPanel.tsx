@@ -132,17 +132,18 @@ export function TopologyInspectorPanel({
             </p>
           </div>
         ) : (
-          errors.map((feature) => {
+          errors.map((feature, idx) => {
             const props = feature.properties;
-            const isSelected = selectedErrorId === props.error_id;
+            const errId = String(props.error_id ?? feature.id ?? `err-${idx + 1}`);
+            const isSelected = selectedErrorId === errId;
             const sevConfig =
               SEVERITY_CONFIG[props.severity as TopologySeverity] ||
               SEVERITY_CONFIG.INFO;
 
             return (
               <div
-                key={props.error_id}
-                onClick={() => onSelectError(props.error_id)}
+                key={errId}
+                onClick={() => onSelectError(errId)}
                 className={`cursor-pointer rounded-lg border p-3 text-xs transition-all ${
                   isSelected
                     ? "border-indigo-500 bg-indigo-950/40 shadow-md ring-1 ring-indigo-500"

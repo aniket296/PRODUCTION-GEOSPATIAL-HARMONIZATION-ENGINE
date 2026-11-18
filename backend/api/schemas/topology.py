@@ -20,6 +20,7 @@ class TopologyErrorProperties(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    error_id: Optional[str] = Field(default=None, description="Unique UUID of the topological error")
     layer_id: Optional[str] = Field(default=None, description="UUID of the parent cadastral layer")
     primary_parcel_id: Optional[str] = Field(default=None, description="Primary parcel UUID involved in conflict")
     secondary_parcel_id: Optional[str] = Field(

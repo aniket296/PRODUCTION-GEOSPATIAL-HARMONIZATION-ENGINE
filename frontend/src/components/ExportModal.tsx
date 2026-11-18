@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   ExportFormat,
   HarmonizationAuditManifest,
@@ -44,6 +44,19 @@ export function ExportModal({
   const [format, setFormat] = useState<ExportFormat>("gpkg");
   const [srid, setSrid] = useState<number>(4326);
   const [includeMergedSlivers, setIncludeMergedSlivers] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, onClose]);
 
   if (!isOpen) {
     return null;

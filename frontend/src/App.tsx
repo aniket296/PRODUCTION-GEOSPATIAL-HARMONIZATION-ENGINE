@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AutoResolveBanner } from "@/components/AutoResolveBanner";
 import { DifferentialMapCanvas } from "@/components/DifferentialMapCanvas";
 import { EdgeSyncStatusBar } from "@/components/EdgeSyncStatusBar";
@@ -10,7 +10,9 @@ import { TopologyInspectorPanel } from "@/components/TopologyInspectorPanel";
 import { WorkbenchHeader } from "@/components/WorkbenchHeader";
 import {
   autoResolveLayer,
+  getEdgeClusterHealth,
   getExportManifest,
+  getLayerParcelsGeoJSON,
   getLayerStatus,
   getTopologyErrors,
   presignLayerExport,
@@ -60,7 +62,27 @@ export function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isStagingExport, setIsStagingExport] = useState(false);
-  const [parcels] = useState<ParcelGeoJSONFeatureCollection | null>(null);
+  const [parcels, setParcels] = useState<ParcelGeoJSONFeatureCollection | null>(null);
+  const [edgeTelemetry, setEdgeTelemetry] = useState<{
+    healthyWorkers: number;
+    totalWorkers: number;
+  } | null>(null);
+
+  const handleRefreshEdgeHealth = useCallback(async () => {
+    try {
+      const summary = await getEdgeClusterHealth();
+      setEdgeTelemetry({
+        healthyWorkers: summary.active_workers_count ?? summary.online_count ?? 0,
+        totalWorkers: summary.total_workers ?? 0,
+      });
+    } catch {
+      // Keep existing telemetry if cluster endpoint is unreachable
+    }
+  }, []);
+
+  useEffect(() => {
+    void handleRefreshEdgeHealth();
+  }, [handleRefreshEdgeHealth]);
 
   const handleUpload = async (params: UploadLayerParams) => {
     setIsUploading(true);
@@ -68,12 +90,16 @@ export function App() {
     try {
       const uploaded = await uploadLayer(params);
       setActiveLayer(uploaded.layer_id);
-      const [status, errors] = await Promise.all([
+      const [status, errors, parcelCollection] = await Promise.all([
         getLayerStatus(uploaded.layer_id),
         getTopologyErrors(uploaded.layer_id),
+        getLayerParcelsGeoJSON(uploaded.layer_id).catch(() => null),
       ]);
       setLayerStatus(status);
       setTopologyErrors(errors.features ?? []);
+      if (parcelCollection) {
+        setParcels(parcelCollection);
+      }
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "Failed to upload layer");
     } finally {
@@ -88,8 +114,14 @@ export function App() {
     try {
       const result = await autoResolveLayer(activeLayerId);
       setLastResolveResult(result);
-      const refreshedErrors = await getTopologyErrors(activeLayerId);
+      const [refreshedErrors, refreshedParcels] = await Promise.all([
+        getTopologyErrors(activeLayerId),
+        getLayerParcelsGeoJSON(activeLayerId).catch(() => null),
+      ]);
       setTopologyErrors(refreshedErrors.features ?? []);
+      if (refreshedParcels) {
+        setParcels(refreshedParcels);
+      }
     } catch (err) {
       setErrorBanner(err instanceof Error ? err.message : "Failed to auto-heal topology");
     } finally {
@@ -131,6 +163,7 @@ export function App() {
         onOpenExport={() => setIsExportOpen(true)}
         onResetWorkbench={() => {
           resetWorkbench();
+          setParcels(null);
           setIsExportOpen(false);
         }}
       />
@@ -144,9 +177,9 @@ export function App() {
         </div>
       )}
 
-      <main className="grid flex-1 grid-cols-12 gap-4 overflow-hidden p-4">
+      <main className="grid flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-12 lg:overflow-hidden">
         {/* Left Control Column */}
-        <section className="col-span-3 flex flex-col gap-4 overflow-y-auto pr-1">
+        <section className="flex flex-col gap-4 pr-1 lg:col-span-3 lg:overflow-y-auto">
           <LayerUploadPanel
             onUpload={handleUpload}
             layerStatus={layerStatus}
@@ -170,7 +203,7 @@ export function App() {
         </section>
 
         {/* Center Differential Map Canvas */}
-        <section className="col-span-6 flex h-full flex-col overflow-hidden">
+        <section className="flex min-h-[360px] flex-col overflow-hidden lg:col-span-6 lg:h-full">
           <DifferentialMapCanvas
             parcels={parcels}
             topologyErrors={filteredErrors}
@@ -186,7 +219,7 @@ export function App() {
         </section>
 
         {/* Right Topology Inspector Column */}
-        <section className="col-span-3 flex h-full flex-col overflow-hidden">
+        <section className="flex min-h-[300px] flex-col overflow-hidden lg:col-span-3 lg:h-full">
           <TopologyInspectorPanel
             errors={filteredErrors}
             selectedErrorId={selectedErrorId}
@@ -211,11 +244,23 @@ export function App() {
       />
 
       <EdgeSyncStatusBar
-        healthyWorkers={activeLayerId ? 1 : 0}
-        totalWorkers={activeLayerId ? 1 : 0}
+        healthyWorkers={
+          edgeTelemetry && edgeTelemetry.totalWorkers > 0
+            ? edgeTelemetry.healthyWorkers
+            : activeLayerId
+              ? 1
+              : 0
+        }
+        totalWorkers={
+          edgeTelemetry && edgeTelemetry.totalWorkers > 0
+            ? edgeTelemetry.totalWorkers
+            : activeLayerId
+              ? 1
+              : 0
+        }
         pendingDeltas={0}
         conflictCount={0}
-        onRefresh={() => {}}
+        onRefresh={handleRefreshEdgeHealth}
       />
     </div>
   );

@@ -72,7 +72,7 @@ export function DifferentialMapCanvas({
         {/* Raw Survey Layer (Left / Base) */}
         <div
           data-testid="raw-layer-pane"
-          className="absolute inset-0 flex flex-col justify-between p-6 text-xs text-amber-300/80"
+          className="absolute inset-0 flex flex-col justify-start p-4 text-xs text-amber-300/80"
         >
           <div className="inline-flex w-fit items-center gap-2 rounded bg-slate-900/80 px-2.5 py-1 text-[11px] font-mono border border-amber-800/50">
             RAW CADASTRE (SOURCE SURVEY)
@@ -87,7 +87,7 @@ export function DifferentialMapCanvas({
               ? { clipPath: `inset(0 0 0 ${swipePosition}%)` }
               : undefined
           }
-          className="absolute inset-0 flex flex-col justify-between bg-indigo-950/15 p-6 text-xs text-emerald-300"
+          className="absolute inset-0 flex flex-col justify-end bg-indigo-950/15 p-4 text-xs text-emerald-300"
         >
           <div className="ml-auto inline-flex w-fit items-center gap-2 rounded bg-slate-900/80 px-2.5 py-1 text-[11px] font-mono border border-emerald-800/50">
             HARMONIZED WGS 84 (EPSG:4326)
@@ -118,8 +118,10 @@ export function DifferentialMapCanvas({
               );
             })}
 
-            {topologyErrors.map((err) => {
-              const errId = err.properties.error_id;
+            {topologyErrors.map((err, idx) => {
+              const errId = String(
+                err.properties.error_id ?? err.id ?? `err-${idx + 1}`
+              );
               const isSelected = selectedErrorId === errId;
               return (
                 <button

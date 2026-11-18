@@ -16,17 +16,17 @@
 - **Total Discovered Requirements:** `9` (`REQ-01` – `REQ-09`, documented in [_qa_project_context.md](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_project_context.md))
 - **Total Applicable Test Cases:** `24` (`9 P0`, `13 P1`, `2 P2`)
 - **Total Executed Live GUI Test Cases:** `24` (`100.0%` execution coverage)
-  - **PASSED:** `19`
-  - **FAILED:** `5` (`GUI-002`, `GUI-009`, `GUI-010`, `GUI-020`, `GUI-022`)
+  - **PASSED:** `24` (`100.0%` — up from `19` baseline, `21` post Sub-Phase 1, and `22` post Sub-Phase 2; all 5 defects `DEF-GUI-001` through `DEF-GUI-005` remediated and live-verified)
+  - **FAILED:** `0`
   - **BLOCKED:** `0`
   - **NOT TESTED:** `0`
-- **Confirmed Unresolved Live GUI Defects:** `5` total
+- **Confirmed Unresolved Live GUI Defects:** `0` total (`5` discovered defects all FIXED & VERIFIED across Sub-Phases 1, 2, and 3)
   - **Critical:** `0`
-  - **High:** `2` (`DEF-GUI-001`, `DEF-GUI-002`)
-  - **Medium:** `1` (`DEF-GUI-003`)
-  - **Low:** `2` (`DEF-GUI-004`, `DEF-GUI-005`)
+  - **High:** `0` (`DEF-GUI-001` FIXED, `DEF-GUI-002` FIXED)
+  - **Medium:** `0` (`DEF-GUI-003` FIXED)
+  - **Low:** `0` (`DEF-GUI-004` FIXED, `DEF-GUI-005` FIXED)
 - **Application Crashes / Unhandled Process Terminations:** `0`
-- **Overall Capped Application Health Score:** **59.00 / 100** (Evidence-Adjusted QA Score = **80.23 / 100**, capped at **59.00** due to 2 unresolved High-severity functional defects `DEF-GUI-001` and `DEF-GUI-002`).
+- **Overall Capped Application Health Score:** **100.00 / 100** (Evidence-Adjusted QA Score = **100.00 / 100**, zero unresolved defects; progression: **59.00 / 100** baseline $\rightarrow$ **79.00 / 100** post Sub-Phase 1 $\rightarrow$ **89.00 / 100** post Sub-Phase 2 $\rightarrow$ **100.00 / 100** post Sub-Phase 3).
 
 ---
 
@@ -39,28 +39,28 @@
 - **Total Weighted Applicable Points:** $45 + 39 + 2 = 86$
 - **Total Weighted Executed Points:** $86$ (`24 / 24` executed)
 
-### Executed Outcomes by Priority
-- **P0 (`9` executed):** `7 PASSED` (`GUI-001`, `GUI-008`, `GUI-013`, `GUI-014`, `GUI-015`, `GUI-016`, `GUI-017` = $7 \times 5 = 35$ pts), `2 FAILED` (`GUI-009`, `GUI-010` = $2 \times 5 = 10$ pts).
-- **P1 (`13` executed):** `12 PASSED` (`GUI-003`, `GUI-004`, `GUI-005`, `GUI-006`, `GUI-007A`, `GUI-007B`, `GUI-007C`, `GUI-011`, `GUI-012`, `GUI-018`, `GUI-019`, `GUI-021` = $12 \times 3 = 36$ pts), `1 FAILED` (`GUI-002` = $1 \times 3 = 3$ pts).
-- **P2 (`2` executed):** `0 PASSED`, `2 FAILED` (`GUI-020`, `GUI-022` = $2 \times 1 = 2$ pts).
-- **Total Weighted Passed Points:** $35 + 36 + 0 = 71$ pts.
+### Executed Outcomes by Priority (Post Sub-Phase 3 — Final)
+- **P0 (`9` executed):** `9 PASSED` (`GUI-001`, `GUI-008`, `GUI-009`, `GUI-010`, `GUI-013`, `GUI-014`, `GUI-015`, `GUI-016`, `GUI-017` = $9 \times 5 = 45$ pts), `0 FAILED`.
+- **P1 (`13` executed):** `13 PASSED` (`GUI-002`, `GUI-003`, `GUI-004`, `GUI-005`, `GUI-006`, `GUI-007A`, `GUI-007B`, `GUI-007C`, `GUI-011`, `GUI-012`, `GUI-018`, `GUI-019`, `GUI-021` = $13 \times 3 = 39$ pts), `0 FAILED`.
+- **P2 (`2` executed):** `2 PASSED` (`GUI-020`, `GUI-022` = $2 \times 1 = 2$ pts), `0 FAILED`.
+- **Total Weighted Passed Points:** $45 + 39 + 2 = 86$ pts (up from $71$ pts baseline, $81$ pts post Sub-Phase 1, and $84$ pts post Sub-Phase 2).
 
 ### Formula Calculations
-$$\text{Weighted Execution Pass Rate} = 100 \times \left(\frac{71}{86}\right) = 82.56\%$$
+$$\text{Weighted Execution Pass Rate} = 100 \times \left(\frac{86}{86}\right) = 100.00\%$$
 
 $$\text{Weighted Execution Coverage} = 100 \times \left(\frac{86}{86}\right) = 100.00\%$$
 
-$$\text{Evidence-Adjusted QA Score} = \frac{82.56 \times 100.00}{100} = 82.56$$
+$$\text{Evidence-Adjusted QA Score} = \frac{100.00 \times 100.00}{100} = 100.00$$
 
 ### Severity-Based Score Cap Application
 | Unresolved Defect Severity | Count | Applicable Cap |
 | :--- | :---: | :---: |
 | **Critical** | `0` | 39 |
-| **High** (`DEF-GUI-001`, `DEF-GUI-002`) | `2` | **59** |
-| **Medium** (`DEF-GUI-003`) | `1` | 79 |
-| **Low** (`DEF-GUI-004`, `DEF-GUI-005`) | `2` | 89 |
+| **High** (`DEF-GUI-001` FIXED, `DEF-GUI-002` FIXED) | `0` | 59 |
+| **Medium** (`DEF-GUI-003` FIXED) | `0` | 79 |
+| **Low** (`DEF-GUI-004` FIXED, `DEF-GUI-005` FIXED) | `0` | 89 |
 
-- **Final Capped Health Score:** $\min(82.56, 59) = \mathbf{59.00 / 100}$.
+- **Final Capped Health Score:** $\mathbf{100.00 / 100}$ (Baseline: `59.00 / 100`, Post Sub-Phase 1: `79.00 / 100`, Post Sub-Phase 2: `89.00 / 100`, Post Sub-Phase 3: `100.00 / 100`).
 
 ---
 
@@ -89,7 +89,7 @@ Full component-by-component inventory is persisted in [_qa_ui_inventory.md](file
 | Test ID | Screen / Resolution / DPI | Window / Viewport Size | Measured Left Sidebar Width | Sibling Control Overlaps | Clipped / Colliding Elements | Result | Screenshot Evidence |
 | :--- | :--- | :---: | :---: | :---: | :--- | :---: | :--- |
 | **GUI-001** | Initial Launch (`100%` DPI) | `1280×800` | `300.0 px` | `0` | `0` | **PASSED** | [GUI-001_initial_launch_1280x800.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/initial/GUI-001_initial_launch_1280x800.png) |
-| **GUI-002** | Minimum Usable Size (`100%` DPI) | `800×600` | `180.0 px` | `0` (controls) / `1` (pane badges) | `2` (`#layer-name-input` clipped; `RAW CADASTRE` & `HARMONIZED WGS 84` badges collide at `y=159px`) | **FAILED (`DEF-GUI-003`)** | [GUI-002_min_800x600.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-002_min_800x600.png) |
+| **GUI-002** | Minimum Usable Size (`100%` DPI) | `800×600` | `752.8 px` (Baseline: `180.0 px`) | `0` (controls) / `0` (pane badges) | `0` (Responsive single-column stack; pane badges vertically offset) | **PASSED (Fixed)** | Before: [GUI-002_min_800x600.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-003_800x600_squeezed_columns.png)<br>After: [GUI-002_remediated](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/regression/GUI-002_remediated_800x600_responsive.png) |
 | **GUI-003** | Default Size (`100%` DPI) | `1280×800` | `300.0 px` | `0` | `0` | **PASSED** | [GUI-003_default_1280x800.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-003_default_1280x800.png) |
 | **GUI-004** | Full HD Maximized (`100%` DPI) | `1920×1080` | `460.0 px` | `0` | `0` | **PASSED** | [GUI-004_fhd_1920x1080.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-004_fhd_1920x1080.png) |
 | **GUI-005** | Narrow & Tall Aspect (`100%` DPI) | `900×1200` | `205.0 px` | `0` | `0` | **PASSED** | [GUI-005_aspect_narrow_900x1200.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-005_aspect_narrow_900x1200.png) |
@@ -105,7 +105,7 @@ Full component-by-component inventory is persisted in [_qa_ui_inventory.md](file
 | Test ID | Priority | Scenario | Live Action Taken | Expected Result | Actual Result | Status | Evidence |
 | :--- | :---: | :--- | :--- | :--- | :--- | :---: | :--- |
 | **GUI-001** | **P0** | Initial launch & empty-state guards | Launch window (`1280×800`) and inspect header & buttons | `No Active Layer` shown; `Export Package` & `Ingest Survey Layer` disabled | 32 visible widgets; `Export disabled=True`, `Ingest disabled=True` | **PASSED** | [GUI-001_initial_launch_1280x800.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/initial/GUI-001_initial_launch_1280x800.png) |
-| **GUI-002** | **P1** | Minimum usable size (`800×600`) | Resize viewport to `800×600` and measure DOM bounding boxes | Readable columns and non-overlapping labels | Left column `180px`, `clipped=2`, Raw & Harmonized badges overlap (`DEF-GUI-003`) | **FAILED** | [GUI-002_min_800x600.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-002_min_800x600.png) |
+| **GUI-002** | **P1** | Minimum usable size (`800×600`) | Resize viewport to `800×600` and measure DOM bounding boxes | Readable columns and non-overlapping labels | **Baseline:** `FAILED` (`leftColWidth=180.0px`, `badgeOverlap=39×26px` — `DEF-GUI-003`)<br>**Post Sub-Phase 2:** `PASSED` (`leftColWidth=752.8px`, `overlaps=0`, `badgeOverlapArea=0px²`) | **PASSED (Fixed)** | Before: [DEF-GUI-003](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-003_800x600_squeezed_columns.png)<br>After: [GUI-002_remediated](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/regression/GUI-002_remediated_800x600_responsive.png) |
 | **GUI-003** | **P1** | Default desktop size (`1280×800`) | Set viewport to `1280×800 @100%` | Zero overlaps/clipping | `overlaps=0, clipped=0, leftColWidth=300.0px` | **PASSED** | [GUI-003_default_1280x800.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-003_default_1280x800.png) |
 | **GUI-004** | **P1** | Full HD maximized (`1920×1080`) | Set viewport to `1920×1080 @100%` | Zero overlaps/clipping | `overlaps=0, clipped=0, leftColWidth=460.0px` | **PASSED** | [GUI-004_fhd_1920x1080.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-004_fhd_1920x1080.png) |
 | **GUI-005** | **P1** | Narrow-and-tall (`900×1200`) | Set viewport to `900×1200 @100%` | Zero overlaps/clipping | `overlaps=0, clipped=0, leftColWidth=205.0px` | **PASSED** | [GUI-005_aspect_narrow_900x1200.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/resizing/GUI-005_aspect_narrow_900x1200.png) |
@@ -114,8 +114,8 @@ Full component-by-component inventory is persisted in [_qa_ui_inventory.md](file
 | **GUI-007B** | **P1** | DPI Scaling `150%` | Set `deviceScaleFactor=1.50` at `1280×800` | Crisp rendering, zero overlaps | `overlaps=0, clipped=0` | **PASSED** | [GUI-007B_dpi_150pct.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/dpi_scaling/GUI-007B_dpi_150pct.png) |
 | **GUI-007C** | **P1** | DPI Scaling `200%` | Set `deviceScaleFactor=2.00` at `1280×800` | Crisp rendering, zero overlaps | `overlaps=0, clipped=0` | **PASSED** | [GUI-007C_dpi_200pct.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/dpi_scaling/GUI-007C_dpi_200pct.png) |
 | **GUI-008** | **P0** | Upload valid UTM 43N GeoJSON survey | Select `ward14_cadastral_survey.geojson`, set name `Ward 14 Cadastral Survey`, CRS `EPSG:32643`, click `Ingest Survey Layer` | Status `COMPLETED` (`100%`), `5 features`, `GeodeticAuditCard` shows `0.042 m` RMSE & `6 GCPs` | Ingested cleanly in `1.66s`; all status & geodetic audit fields rendered | **PASSED** | [GUI-008_ward14_uploaded.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-008_ward14_uploaded.png) |
-| **GUI-009** | **P0** | Parcel rendering & `ParcelDetailCard` selection | Inspect `DifferentialMapCanvas` parcel badge and attempt to click a parcel chip | `5 Harmonized Parcels` badge & clickable parcel chips that populate `ParcelDetailCard` | Shows `0 Harmonized Parcels` and 0 chips (`App.tsx` never sets `parcels` — `DEF-GUI-001`) | **FAILED** | [DEF-GUI-001_zero_harmonized_parcels_on_canvas.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-001_zero_harmonized_parcels_on_canvas.png) |
-| **GUI-010** | **P0** | Defect card selection & canvas chip IDs | Click first defect card in `TopologyInspectorPanel` | Clicked card highlights (`selectedCards=1`) & canvas chips show `OVERLAP:<id>` | Chips render `OVERLAP:` (empty ID) and `selectedCards=0` (`props.error_id` is `undefined` — `DEF-GUI-002`) | **FAILED** | [DEF-GUI-002_topology_error_id_undefined.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-002_topology_error_id_undefined.png) |
+| **GUI-009** | **P0** | Parcel rendering & `ParcelDetailCard` selection | Inspect `DifferentialMapCanvas` parcel badge and click `KHASRA-101` chip | `5 Harmonized Parcels` badge & clickable parcel chips that populate `ParcelDetailCard` | **Baseline:** `FAILED` (`0 Harmonized Parcels` — `DEF-GUI-001`)<br>**Post Sub-Phase 1:** `PASSED` (`5 Harmonized Parcels`, clicked `KHASRA-101`, `ParcelDetailCard` rendered `10000.00 m²`, `400.00 m`, `0.785`, `Ramesh Kumar`) | **PASSED (Fixed)** | Before: [DEF-GUI-001](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-001_zero_harmonized_parcels_on_canvas.png)<br>After: [GUI-009_remediated](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/regression/GUI-009_remediated_parcels_and_detail_card.png) |
+| **GUI-010** | **P0** | Defect card selection & canvas chip IDs | Click first defect card in `TopologyInspectorPanel` | Clicked card highlights (`selectedCards=1`) & canvas chips show `OVERLAP:<id>` | **Baseline:** `FAILED` (`OVERLAP:` empty ID, `selectedCards=0` — `DEF-GUI-002`)<br>**Post Sub-Phase 1:** `PASSED` (`selectedCards=1`, chip `OVERLAP:143551e4-11bf-53b5-94e5-0e4d783a2274` highlighted) | **PASSED (Fixed)** | Before: [DEF-GUI-002](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-002_topology_error_id_undefined.png)<br>After: [GUI-010_remediated](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/regression/GUI-010_remediated_topology_selection.png) |
 | **GUI-011** | **P1** | Topology severity filter (`CRITICAL_DISPUTE`) | Select `Critical Dispute` in `TopologyInspectorPanel` severity dropdown | Only the `1` critical dispute (>2% overlap) remains visible | Badge updates to `1` (`1 active`) and displays only the `1000.00 m²` critical dispute | **PASSED** | [GUI-011_topology_filter_critical.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-011_topology_filter_critical.png) |
 | **GUI-012** | **P1** | Swipe divider slider (`75%`) & View Mode toggle | Drag range slider to `75%`, then click `Overlay` mode button | `clipPath: inset(0px 0px 0px 75%)` in Swipe mode; removed in Overlay mode | Verified exact CSS `clipPath` and label `Harmonized (75%)` | **PASSED** | [GUI-012_canvas_swipe_75pct.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-012_canvas_swipe_75pct.png) |
 | **GUI-013** | **P0** | Deterministic Topological Auto-Heal | Click `Auto-Heal Layer` button in `AutoResolveBanner` | Auto-resolvable defects healed; critical dispute locked; metrics displayed | Displays `4 defects resolved`, `1 dispute locked`, `Slivers Merged: 1`, `Overlaps Trimmed: 1`, `RESOLVED` badges stamped | **PASSED** | [GUI-013_auto_heal_completed.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-013_auto_heal_completed.png) |
@@ -125,9 +125,9 @@ Full component-by-component inventory is persisted in [_qa_ui_inventory.md](file
 | **GUI-017** | **P0** | Disguised Windows PE executable (`MZ`) rejection | Upload `disguised_executable.geojson` | `role="alert"` banner blocks `Windows PE executable (EXECUTABLE_PAYLOAD)` | Alert banner blocked executable upload immediately | **PASSED** | [GUI-017_negative_upload.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-017_negative_upload.png) |
 | **GUI-018** | **P1** | Multilingual Unicode & Windows-reserved chars in Layer Name | Upload `multilingual_खसरा_survey.geojson` with name `वार्ड १४ • முருகன் • محمد <>:"/\|?* ∑∆π` | Layer ingests (`COMPLETED`, `1 feature`) and header renders Unicode string safely | Header and status rendered Devanagari, Tamil, Arabic, and math symbols without truncation or XSS | **PASSED** | [GUI-018_unicode_upload.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-018_unicode_upload.png) |
 | **GUI-019** | **P1** | Large 120-parcel dataset & ESRI Shapefile ZIP | Upload `grid_120_parcels.geojson` (`120 features`) and `rampur_shapefile.zip` | Both transition to `COMPLETED` with accurate feature counts (`120` and `1`) | Both ingested in `<1.5s` each with `100%` progress | **PASSED** | [GUI-019A_large_120_parcels.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-019A_large_120_parcels.png) |
-| **GUI-020** | **P2** | `EdgeSyncStatusBar` `Sync Telemetry` button | Register active edge worker on backend and click `Sync Telemetry` in footer | Footer queries `/api/v1/edge/health` and displays `Edge Cluster: 1/1 Online` | Footer shows `Edge Cluster: Offline` (`onRefresh={() => {}}` is a no-op — `DEF-GUI-004`) | **FAILED** | [DEF-GUI-004_edge_sync_noop_button.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-004_edge_sync_noop_button.png) |
-| **GUI-021** | **P1** | Rapid interaction stress (`40` rapid transitions) | Toggle `Swipe`/`Overlay`/`Split` 30× and open/close `ExportModal` 10× | Zero freezes, zero duplicate modals, stable JS heap | Completed 40 transitions in `1,476.3 ms`; JS heap `6.17 MB -> 6.63 MB` | **PASSED** | [GUI-021_rapid_stress_test.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-021_rapid_stress_test.png) |
-| **GUI-022** | **P2** | Keyboard `Escape` key dismissal on `ExportModal` | Open `ExportModal` (`role="dialog"`) and press `Escape` key | `ExportModal` closes (`onClose()`) | `ExportModal` remained open after pressing `Escape` (`DEF-GUI-005`) | **FAILED** | [DEF-GUI-005_export_modal_escape_not_closing.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-005_export_modal_escape_not_closing.png) |
+| **GUI-020** | **P2** | `EdgeSyncStatusBar` `Sync Telemetry` button | Register active edge worker on backend and click `Sync Telemetry` in footer | Footer queries `/api/v1/edge/health` and displays `Edge Cluster: 1/1 Online` | **Baseline:** `FAILED` (`Edge Cluster: Offline` — `DEF-GUI-004`)<br>**Post Sub-Phase 3:** `PASSED` (Footer updated to `Edge Cluster: 1/1 Online` via `/api/v1/edge/health`) | **PASSED (Fixed)** | Before: [DEF-GUI-004](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-004_edge_sync_noop_button.png)<br>After: [GUI-020_remediated](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/regression/GUI-020_remediated_edge_sync.png) |
+| **GUI-021** | **P1** | Rapid interaction stress (`40` rapid transitions) | Toggle `Swipe`/`Overlay`/`Split` 30× and open/close `ExportModal` 10× | Zero freezes, zero duplicate modals, stable JS heap | Completed 40 transitions in `1,478.3 ms`; JS heap `7.03 MB -> 7.50 MB` | **PASSED** | [GUI-021_rapid_stress_test.png](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/functional/GUI-021_rapid_stress_test.png) |
+| **GUI-022** | **P2** | Keyboard `Escape` key dismissal on `ExportModal` | Open `ExportModal` (`role="dialog"`) and press `Escape` key | `ExportModal` closes (`onClose()`) | **Baseline:** `FAILED` (`ExportModal` remained open — `DEF-GUI-005`)<br>**Post Sub-Phase 3:** `PASSED` (`ExportModal` closed cleanly on `Escape`: `modal_open_before_esc=True, modal_open_after_esc=False`) | **PASSED (Fixed)** | Before: [DEF-GUI-005](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/defects/DEF-GUI-005_export_modal_escape_not_closing.png)<br>After: [GUI-022_remediated](file:///d:/projects/PRODUCTION%20GEOSPATIAL%20HARMONIZATION%20ENGINE/_qa_test_assets/screenshots/regression/GUI-022_remediated_modal_escape.png) |
 
 ---
 
@@ -137,13 +137,13 @@ Full component-by-component inventory is persisted in [_qa_ui_inventory.md](file
 | :--- | :--- | :--- | :---: | :--- |
 | **REQ-01** | Multi-format cadastral upload (`.geojson`, `.zip`/`.shp`) with pre-flight magic-byte & security validation | `GUI-001`, `GUI-008`, `GUI-015`, `GUI-016`, `GUI-017`, `GUI-018`, `GUI-019` | **PASSED** (`7/7`) | None |
 | **REQ-02** | Real-time layer status, progress bar, feature count, and CRS display in header & upload card | `GUI-001`, `GUI-008`, `GUI-018`, `GUI-019` | **PASSED** (`4/4`) | None |
-| **REQ-03** | Topological defect inspection with severity/type filtering & individual defect selection | `GUI-010`, `GUI-011` | **PARTIAL / FAILED** (`1/2`) | `DEF-GUI-002` |
+| **REQ-03** | Topological defect inspection with severity/type filtering & individual defect selection | `GUI-010`, `GUI-011` | **PASSED** (`2/2`) | None (`DEF-GUI-002` Fixed) |
 | **REQ-04** | Deterministic topological auto-healing with critical dispute lock protection | `GUI-013` | **PASSED** (`1/1`) | None |
-| **REQ-05** | Dual differential GIS viewport (`Swipe`/`Overlay`/`Split`) with parcel & defect selection | `GUI-009`, `GUI-012` | **PARTIAL / FAILED** (`1/2`) | `DEF-GUI-001`, `DEF-GUI-002` |
+| **REQ-05** | Dual differential GIS viewport (`Swipe`/`Overlay`/`Split`) with parcel & defect selection | `GUI-009`, `GUI-012` | **PASSED** (`2/2`) | None (`DEF-GUI-001`, `DEF-GUI-002` Fixed) |
 | **REQ-06** | Geodetic calibration audit display (`sourceCrs -> targetCrs`, RMSE, GCP count, TPS badge) | `GUI-008` | **PASSED** (`1/1`) | None |
 | **REQ-07** | Multi-format export (`.gpkg`, `.geojson`, `.fgb`, `.zip` bundle) & SHA-256 audit certificate | `GUI-014` | **PASSED** (`1/1`) | None |
-| **REQ-08** | Edge cluster synchronization telemetry status bar & refresh | `GUI-020` | **FAILED** (`0/1`) | `DEF-GUI-004` |
-| **REQ-09** | Responsive layout across window dimensions (`800×600` to `1920×1080`, `100%–200%` DPI), stress stability, & keyboard navigation | `GUI-002`–`GUI-007C`, `GUI-021`, `GUI-022` | **PARTIAL / FAILED** (`8/10`) | `DEF-GUI-003`, `DEF-GUI-005` |
+| **REQ-08** | Edge cluster synchronization telemetry status bar & refresh | `GUI-020` | **PASSED** (`1/1`) | None (`DEF-GUI-004` Fixed) |
+| **REQ-09** | Responsive layout across window dimensions (`800×600` to `1920×1080`, `100%–200%` DPI), stress stability, & keyboard navigation | `GUI-002`–`GUI-007C`, `GUI-021`, `GUI-022` | **PASSED** (`10/10`) | None (`DEF-GUI-003`, `DEF-GUI-005` Fixed) |
 
 ---
 
@@ -151,11 +151,11 @@ Full component-by-component inventory is persisted in [_qa_ui_inventory.md](file
 
 | Defect ID | Title | Severity | Category | Affected Screen | Status |
 | :--- | :--- | :---: | :--- | :--- | :---: |
-| **DEF-GUI-001** | `DifferentialMapCanvas` always displays `0 Harmonized Parcels` and `ParcelDetailCard` is unreachable because `App.tsx` never populates `parcels` state | **High** | Functional / Frontend-Backend Integration | `DifferentialMapCanvas` & `ParcelDetailCard` | **OPEN** |
-| **DEF-GUI-002** | Topology error features lack `properties.error_id`, causing canvas chips to render empty IDs (`OVERLAP:`) and clicking a defect card in `TopologyInspectorPanel` to fail selection | **High** | Functional / Frontend-Backend Schema Mismatch | `TopologyInspectorPanel` & `DifferentialMapCanvas` | **OPEN** |
-| **DEF-GUI-003** | At `800×600` minimum resolution, fixed 12-column grid squeezes sidebars (`180px`) AND `RAW CADASTRE` / `HARMONIZED WGS 84` badges collide in `DifferentialMapCanvas` | **Medium** | Visual / Responsive Layout & Text Overlap | `Main Workbench` & `DifferentialMapCanvas` (`800×600`) | **OPEN** |
-| **DEF-GUI-004** | `Sync Telemetry` button in `EdgeSyncStatusBar` is wired to a no-op `() => {}` and never queries `/api/v1/edge/health` | **Low** | Functional / Backend Integration | `EdgeSyncStatusBar` (Footer) | **OPEN** |
-| **DEF-GUI-005** | `ExportModal` (`role="dialog"`) does not close when pressing the `Escape` key | **Low** | Accessibility & Keyboard Navigation | `ExportModal` | **OPEN** |
+| **DEF-GUI-001** | `DifferentialMapCanvas` always displays `0 Harmonized Parcels` and `ParcelDetailCard` is unreachable because `App.tsx` never populates `parcels` state | **High** | Functional / Frontend-Backend Integration | `DifferentialMapCanvas` & `ParcelDetailCard` | **FIXED & VERIFIED (Sub-Phase 1)** |
+| **DEF-GUI-002** | Topology error features lack `properties.error_id`, causing canvas chips to render empty IDs (`OVERLAP:`) and clicking a defect card in `TopologyInspectorPanel` to fail selection | **High** | Functional / Frontend-Backend Schema Mismatch | `TopologyInspectorPanel` & `DifferentialMapCanvas` | **FIXED & VERIFIED (Sub-Phase 1)** |
+| **DEF-GUI-003** | At `800×600` minimum resolution, fixed 12-column grid squeezes sidebars (`180px`) AND `RAW CADASTRE` / `HARMONIZED WGS 84` badges collide in `DifferentialMapCanvas` | **Medium** | Visual / Responsive Layout & Text Overlap | `Main Workbench` & `DifferentialMapCanvas` (`800×600`) | **FIXED & VERIFIED (Sub-Phase 2)** |
+| **DEF-GUI-004** | `Sync Telemetry` button in `EdgeSyncStatusBar` is wired to a no-op `() => {}` and never queries `/api/v1/edge/health` | **Low** | Functional / Backend Integration | `EdgeSyncStatusBar` (Footer) | **FIXED & VERIFIED (Sub-Phase 3)** |
+| **DEF-GUI-005** | `ExportModal` (`role="dialog"`) does not close when pressing the `Escape` key | **Low** | Accessibility & Keyboard Navigation | `ExportModal` | **FIXED & VERIFIED (Sub-Phase 3)** |
 
 ### Detailed Defect Records
 

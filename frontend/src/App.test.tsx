@@ -11,9 +11,35 @@ vi.mock("@/lib/api", async () => {
     uploadLayer: vi.fn(),
     getLayerStatus: vi.fn(),
     getTopologyErrors: vi.fn(),
+    getLayerParcelsGeoJSON: vi.fn().mockResolvedValue({
+      type: "FeatureCollection",
+      features: [
+        {
+          type: "Feature",
+          id: "P-1",
+          geometry: { type: "MultiPolygon", coordinates: [] },
+          properties: {
+            parcel_identifier: "KHASRA-101",
+            metric_area_sqm: 10000.0,
+            metric_perimeter_m: 400.0,
+            polsby_popper_compactness: 0.785,
+            attributes: { khasra_number: "101/A", owner_name: "Ramesh Kumar" },
+          },
+        },
+      ],
+    }),
     autoResolveLayer: vi.fn(),
     presignLayerExport: vi.fn(),
     getExportManifest: vi.fn(),
+    getEdgeClusterHealth: vi.fn().mockResolvedValue({
+      total_workers: 1,
+      online_count: 1,
+      idle_count: 0,
+      busy_count: 0,
+      degraded_count: 0,
+      offline_count: 0,
+      active_workers_count: 1,
+    }),
   };
 });
 

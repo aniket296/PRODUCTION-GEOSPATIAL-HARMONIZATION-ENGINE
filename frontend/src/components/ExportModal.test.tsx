@@ -96,4 +96,22 @@ describe("ExportModal", () => {
     expect(screen.getByText(/e3b0c44298fc1c149/i)).toBeInTheDocument();
     expect(screen.getByText(/2cf24dba5fb0a30e/i)).toBeInTheDocument();
   });
+
+  it("invokes onClose when the Escape key is pressed while open", () => {
+    const onClose = vi.fn();
+
+    render(
+      <ExportModal
+        isOpen={true}
+        onClose={onClose}
+        onPresign={vi.fn()}
+        stagedExport={null}
+        auditManifest={null}
+        isStaging={false}
+      />
+    );
+
+    fireEvent.keyDown(window, { key: "Escape", code: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });

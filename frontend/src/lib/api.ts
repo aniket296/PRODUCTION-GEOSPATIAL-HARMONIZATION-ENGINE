@@ -1,3 +1,4 @@
+import type { ParcelGeoJSONFeatureCollection } from "@/lib/flatgeobufClient";
 import type {
   AutoResolveOptions,
   AutoResolveResponse,
@@ -72,6 +73,15 @@ export async function getTopologyErrors(
   return parseJsonOrThrow<TopologyErrorFeatureCollection>(response);
 }
 
+export async function getLayerParcelsGeoJSON(
+  layerId: string
+): Promise<ParcelGeoJSONFeatureCollection> {
+  const response = await fetch(
+    `${API_BASE}/layers/${encodeURIComponent(layerId)}/export?format=geojson`
+  );
+  return parseJsonOrThrow<ParcelGeoJSONFeatureCollection>(response);
+}
+
 export async function autoResolveLayer(
   layerId: string,
   options: AutoResolveOptions = {}
@@ -135,4 +145,19 @@ export function getFlatGeobufUrl(
     return base;
   }
   return `${base}?bbox=${bbox.join(",")}`;
+}
+
+export interface EdgeClusterHealthResponse {
+  total_workers: number;
+  online_count: number;
+  idle_count: number;
+  busy_count: number;
+  degraded_count: number;
+  offline_count: number;
+  active_workers_count: number;
+}
+
+export async function getEdgeClusterHealth(): Promise<EdgeClusterHealthResponse> {
+  const response = await fetch(`${API_BASE}/edge/health`);
+  return parseJsonOrThrow<EdgeClusterHealthResponse>(response);
 }

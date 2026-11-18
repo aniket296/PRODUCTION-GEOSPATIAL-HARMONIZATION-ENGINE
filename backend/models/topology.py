@@ -250,6 +250,7 @@ class TopologicalError(Base):
             "id": str(self.id) if self.id else None,
             "geometry": geom_dict,
             "properties": {
+                "error_id": str(self.id) if self.id else None,
                 "layer_id": str(self.layer_id) if self.layer_id else None,
                 "primary_parcel_id": str(self.primary_parcel_id) if self.primary_parcel_id else None,
                 "secondary_parcel_id": str(self.secondary_parcel_id) if self.secondary_parcel_id else None,
