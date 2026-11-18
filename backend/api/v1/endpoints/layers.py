@@ -87,6 +87,7 @@ async def upload_cadastral_layer(
     response: Response,
     file: UploadFile = File(..., description="Geospatial survey dataset (GeoJSON, Shapefile ZIP, FlatGeobuf, DXF, GeoTIFF)"),
     layer_name: Optional[str] = Form(None, description="Optional human-readable cadastral layer name"),
+    name: Optional[str] = Form(None, description="Optional alias for layer_name sent by frontend clients"),
     declared_crs: Optional[str] = Form(None, description="Declared CRS (e.g., EPSG:32643)"),
     target_crs: Optional[str] = Form("EPSG:4326", description="Target harmonization CRS"),
     normalize_geometries: bool = Form(True, description="Whether to automatically cast to 2D MultiPolygons"),
@@ -142,11 +143,12 @@ async def upload_cadastral_layer(
     layer_id = uuid.uuid4()
     upload_dir = Path(tempfile.gettempdir()) / "cadastre_uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
-    clean_filename = f"{layer_id}_{Path(file.filename).name}"
+    safe_base_filename = Path(file.filename).name
+    clean_filename = f"{layer_id}_{safe_base_filename}"
     staged_path = upload_dir / clean_filename
     staged_path.write_bytes(content)
 
-    resolved_name = layer_name or Path(file.filename).stem
+    resolved_name = layer_name or name or Path(safe_base_filename).stem
     detected_format = validation_report.format.value if validation_report.format else "UNKNOWN"
     storage_path = str(staged_path)
 
@@ -155,7 +157,7 @@ async def upload_cadastral_layer(
         from backend.storage.minio_client import MinioStorageClient
 
         storage_client = MinioStorageClient()
-        object_name = f"{layer_id}/{file.filename}"
+        object_name = f"{layer_id}/{safe_base_filename}"
         storage_client.upload_file(
             bucket_name=settings.minio_bucket_raw,
             object_name=object_name,
@@ -164,7 +166,7 @@ async def upload_cadastral_layer(
             metadata={
                 "layer_id": str(layer_id),
                 "format": detected_format,
-                "original_filename": file.filename,
+                "original_filename": safe_base_filename,
             },
         )
         storage_path = f"s3://{settings.minio_bucket_raw}/{object_name}"

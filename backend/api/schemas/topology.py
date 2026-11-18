@@ -163,6 +163,27 @@ class AutoResolveRequest(BaseModel):
         default=True,
         description="Abort and roll back transaction if any AUTO_RESOLVABLE defect remains post-healing",
     )
+    sliver_area_threshold_sqm: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional override for metric sliver maximum area threshold in square meters",
+    )
+    overlap_threshold_pct: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        le=100.0,
+        description="Optional override for auto-resolvable overlap percentage threshold",
+    )
+    gap_snap_tolerance_m: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional override for boundary snapping tolerance in meters",
+    )
+    grid_snap_precision_m: Optional[float] = Field(
+        default=None,
+        gt=0.0,
+        description="Optional override for coordinate grid normalization precision in meters",
+    )
 
 
 class AutoResolveResponse(BaseModel):

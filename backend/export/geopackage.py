@@ -32,7 +32,9 @@ from backend.models.parcel import HarmonizedParcel
 GPKG_APPLICATION_ID: int = 0x47504B47
 GPKG_USER_VERSION: int = 10300
 SUPPORTED_GPKG_SRIDS: frozenset[int] = frozenset({4326, 32643})
+DETERMINISTIC_GPKG_TIMESTAMP_ISO: str = "2026-01-01T00:00:00.000Z"
 _TABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SAFE_TABLE_INPUT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 _WGS84_WKT = (
     'GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
@@ -74,9 +76,15 @@ def _to_multipolygon(geom: BaseGeometry) -> MultiPolygon:
 
 
 def _validate_table_name(table_name: str) -> str:
-    if not _TABLE_NAME_RE.match(table_name) or table_name.lower().startswith("gpkg_"):
+    raw = table_name.strip() if isinstance(table_name, str) else ""
+    if not raw or not _SAFE_TABLE_INPUT_RE.match(raw):
         raise ValueError(f"Invalid GeoPackage table_name: {table_name!r}")
-    return table_name
+    normalized = raw.replace("-", "_")
+    if normalized[0].isdigit():
+        normalized = f"layer_{normalized}"
+    if not _TABLE_NAME_RE.match(normalized) or normalized.lower().startswith("gpkg_"):
+        raise ValueError(f"Invalid GeoPackage table_name: {table_name!r}")
+    return normalized
 
 
 def _validate_srid(srid: int) -> int:
@@ -171,7 +179,7 @@ def _init_gpkg_schema(conn: sqlite3.Connection, table_name: str, srid: int, bbox
         """
     )
 
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    now_iso = DETERMINISTIC_GPKG_TIMESTAMP_ISO
     min_x, min_y, max_x, max_y = bbox if bbox is not None else (None, None, None, None)
 
     conn.execute(
@@ -191,7 +199,7 @@ def _init_gpkg_schema(conn: sqlite3.Connection, table_name: str, srid: int, bbox
 
     conn.execute(
         f"""
-        CREATE TABLE {table_name} (
+        CREATE TABLE "{table_name}" (
             fid INTEGER PRIMARY KEY AUTOINCREMENT,
             geom BLOB NOT NULL,
             parcel_id TEXT NOT NULL,
@@ -268,7 +276,7 @@ def export_parcels_to_geopackage(
             if rows:
                 conn.executemany(
                     f"""
-                    INSERT INTO {valid_table} (
+                    INSERT INTO "{valid_table}" (
                         geom,
                         parcel_id,
                         parcel_identifier,
@@ -313,7 +321,7 @@ def read_geopackage_features(
                 if row is None:
                     return []
                 resolved_table = row[0]
-            _validate_table_name(resolved_table)
+            valid_resolved_table = _validate_table_name(resolved_table)
 
             cursor = conn.execute(
                 f"""
@@ -330,7 +338,7 @@ def read_geopackage_features(
                     dispute_locked,
                     resolution_status,
                     attributes_json
-                FROM {resolved_table}
+                FROM "{valid_resolved_table}"
                 ORDER BY fid
                 """
             )

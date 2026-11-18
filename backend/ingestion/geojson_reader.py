@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Dict, Generator, List, Optional, Tuple, Union
 
+import pyproj
 from shapely.geometry import LinearRing, MultiPolygon, Polygon, shape
 from shapely.geometry.polygon import orient
 from shapely.ops import transform
@@ -91,9 +93,14 @@ def round_coordinates(geom: Any, precision: int = 7) -> Any:
     """Round all coordinates of a Shapely geometry to specified decimal precision.
 
     Drops the Z coordinate if present, ensuring 2D planar/geodetic representation.
+    Raises GeoJSONValidationError if any coordinate is NaN or Infinite.
     """
     def _round_coords(x: float, y: float, z: Optional[float] = None) -> Tuple[float, float]:
-        return round(float(x), precision), round(float(y), precision)
+        fx = float(x)
+        fy = float(y)
+        if not (math.isfinite(fx) and math.isfinite(fy)):
+            raise GeoJSONValidationError(f"Non-finite coordinate detected: ({x}, {y})")
+        return round(fx, precision), round(fy, precision)
 
     return transform(_round_coords, geom)
 
@@ -104,6 +111,9 @@ def remove_duplicate_consecutive_vertices(geom: Any) -> Any:
         def _clean_ring(coords: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
             if not coords:
                 return coords
+            for cx, cy in coords:
+                if not (math.isfinite(float(cx)) and math.isfinite(float(cy))):
+                    raise GeoJSONValidationError(f"Non-finite coordinate in ring: ({cx}, {cy})")
             cleaned = [coords[0]]
             for pt in coords[1:]:
                 if pt != cleaned[-1]:
@@ -201,7 +211,16 @@ class GeoJSONIngestionReader:
         if not geo_type:
             raise GeoJSONValidationError("Missing required 'type' field in GeoJSON root")
 
-        detected_crs = target_crs or extract_crs_from_geojson(data)
+        source_crs = extract_crs_from_geojson(data)
+        detected_crs = target_crs or source_crs
+        reproject_fn = None
+        if target_crs and source_crs.upper() != target_crs.upper():
+            try:
+                reproject_fn = pyproj.Transformer.from_crs(
+                    source_crs, target_crs, always_xy=True
+                ).transform
+            except Exception:
+                reproject_fn = None
 
         # Default coordinate precision: 7 decimals for EPSG:4326, 3 decimals for metric grids
         if precision is None:
@@ -237,6 +256,9 @@ class GeoJSONIngestionReader:
                 shapely_geom = shape(geom_dict)
             except Exception as exc:
                 raise GeoJSONValidationError(f"Failed to parse geometry at index {idx}: {exc}") from exc
+
+            if reproject_fn is not None:
+                shapely_geom = transform(reproject_fn, shapely_geom)
 
             # Round coordinates and drop Z
             shapely_geom = round_coordinates(shapely_geom, precision=precision)

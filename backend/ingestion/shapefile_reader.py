@@ -12,6 +12,7 @@ import zipfile
 
 import pyproj
 from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.ops import transform
 import shapefile  # pyshp
 
 from backend.ingestion.geojson_reader import (
@@ -215,16 +216,27 @@ def unpack_shapefile_zip(
     base_name: Optional[str] = None,
 ) -> ShapefileComponentSet:
     """Extract Shapefile archive and validate its component files."""
+    from backend.ingestion.validation import (
+        CorruptArchiveError,
+        PathTraversalError,
+        UploadValidator,
+        ZipBombError,
+    )
+
     extract_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        if isinstance(zip_source, bytes):
-            with zipfile.ZipFile(io.BytesIO(zip_source)) as zf:
-                zf.extractall(extract_dir)
-        else:
-            with zipfile.ZipFile(Path(zip_source)) as zf:
-                zf.extractall(extract_dir)
-    except zipfile.BadZipFile as exc:
+        raw_zip_bytes = (
+            zip_source
+            if isinstance(zip_source, bytes)
+            else Path(zip_source).read_bytes()
+        )
+        UploadValidator.validate_archive_security(raw_zip_bytes)
+        with zipfile.ZipFile(io.BytesIO(raw_zip_bytes)) as zf:
+            zf.extractall(extract_dir)
+    except (PathTraversalError, ZipBombError):
+        raise
+    except (zipfile.BadZipFile, CorruptArchiveError) as exc:
         raise ShapefileCorruptArchiveError(f"Invalid or corrupted ZIP archive: {exc}") from exc
     except Exception as exc:
         raise ShapefileCorruptArchiveError(f"Failed to unpack ZIP archive: {exc}") from exc
@@ -249,13 +261,21 @@ class ShapefileIngestionReader:
         explode_multipolygons: bool = False,
     ) -> ShapefileIngestionResult:
         """Parse features from a validated ShapefileComponentSet."""
-        if target_crs:
-            detected_crs = target_crs
-        elif component_set.prj_path and component_set.prj_path.exists():
+        if component_set.prj_path and component_set.prj_path.exists():
             prj_text = component_set.prj_path.read_text(encoding="utf-8", errors="ignore")
-            detected_crs = parse_prj_to_crs(prj_text)
+            source_crs = parse_prj_to_crs(prj_text)
         else:
-            detected_crs = "EPSG:4326"
+            source_crs = "EPSG:4326"
+
+        detected_crs = target_crs or source_crs
+        reproject_fn = None
+        if target_crs and source_crs.upper() != target_crs.upper():
+            try:
+                reproject_fn = pyproj.Transformer.from_crs(
+                    source_crs, target_crs, always_xy=True
+                ).transform
+            except Exception:
+                reproject_fn = None
 
         if precision is None:
             precision = 7 if detected_crs == "EPSG:4326" else 3
@@ -302,6 +322,9 @@ class ShapefileIngestionReader:
                 raw_geom = shape(shp_geom.__geo_interface__)
             except Exception as exc:
                 raise ShapefileValidationError(f"Invalid geometry at index {idx}: {exc}") from exc
+
+            if reproject_fn is not None:
+                raw_geom = transform(reproject_fn, raw_geom)
 
             # Round coordinates and drop Z/M coordinates
             cleaned_geom = round_coordinates(raw_geom, precision=precision)

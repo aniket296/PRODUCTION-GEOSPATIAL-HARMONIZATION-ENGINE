@@ -12,6 +12,7 @@ Directive Sections 26-28:
 from __future__ import annotations
 
 import io
+import json
 import math
 import struct
 import uuid
@@ -46,6 +47,7 @@ _COLUMN_SCHEMA: tuple[tuple[str, int], ...] = (
     ("is_disputed", ColumnType.Json),
     ("dispute_locked", ColumnType.Json),
     ("resolution_status", ColumnType.String),
+    ("attributes", ColumnType.Json),
 )
 
 
@@ -135,6 +137,8 @@ def _encode_properties(parcel: HarmonizedParcel) -> bytes:
     _add_bool(6, bool(parcel.is_disputed))
     _add_bool(7, bool(parcel.dispute_locked))
     _add_str(8, parcel.resolution_status or "ORIGINAL")
+    if parcel.attributes:
+        _add_str(9, json.dumps(parcel.attributes, sort_keys=True, separators=(",", ":")))
     return bytes(buf)
 
 

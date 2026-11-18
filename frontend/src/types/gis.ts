@@ -83,8 +83,18 @@ export interface AutoResolveOptions {
 
 export interface AutoResolveResponse {
   layer_id: string;
-  resolved_count: number;
-  skipped_disputed_count: number;
+  status?: "COMPLETED" | "COMPLETED_WITH_DISPUTES" | string;
+  total_parcels?: number;
+  healed_parcel_count?: number;
+  slivers_merged_count?: number;
+  micro_overlaps_resolved_count?: number;
+  boundaries_snapped_count?: number;
+  grid_normalized_count?: number;
+  resolved_errors_count?: number;
+  remaining_disputes_count?: number;
+  residual_auto_resolvable_count?: number;
+  resolved_count?: number;
+  skipped_disputed_count?: number;
   slivers_merged?: number;
   overlaps_trimmed?: number;
   gaps_closed?: number;

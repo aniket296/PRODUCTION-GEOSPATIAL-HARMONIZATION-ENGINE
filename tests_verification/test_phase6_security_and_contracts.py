@@ -44,64 +44,72 @@ def _build_valid_shapefile_zip_bytes(extra_entry_name: str | None = None) -> byt
 
 
 class TestSecurityAndContractVerification:
-    """Proves security findings and API/worker contract mismatches."""
+    """Verifies security hardening and API/worker contract alignment."""
 
-    def test_finding_f02_celery_worker_schema_mismatch_and_noop_task_stubs(self) -> None:
-        """FINDING F-02 (Verified by execution):
-        1. RawCadastralLayer has no `srid_declared` or `bounds` column (used by _update_layer_record_sync).
-        2. detect_topology_errors_task, auto_heal_topology_task, and export_harmonized_layer_task are no-op stubs.
+    def test_finding_f02_celery_worker_schema_alignment_and_task_execution(self) -> None:
+        """FINDING F-02 REMEDIATED (Verified by execution):
+        1. _update_layer_record_sync writes to valid RawCadastralLayer columns (`source_crs` and `bounding_box`).
+        2. detect_topology_errors_task, auto_heal_topology_task, and export_harmonized_layer_task execute cleanly.
         """
-        mapper_cols = set(RawCadastralLayer.__table__.columns.keys())
-        assert "srid_declared" not in mapper_cols
-        assert "bounds" not in mapper_cols
-        assert "source_crs" in mapper_cols
-        assert "bounding_box" in mapper_cols
+        import inspect
+        from backend.worker.celery_app import _update_layer_record_sync
 
-        # No-op task stubs return COMPLETED immediately even for a non-existent layer_id:
+        src = inspect.getsource(_update_layer_record_sync)
+        assert "layer.source_crs" in src
+        assert "layer.bounding_box" in src
+        assert "srid_declared" not in src
+
         r_topo = detect_topology_errors_task.run("00000000-0000-0000-0000-000000000000")
         r_heal = auto_heal_topology_task.run("00000000-0000-0000-0000-000000000000")
         r_exp = export_harmonized_layer_task.run("00000000-0000-0000-0000-000000000000")
         assert r_topo["status"] == "COMPLETED"
+        assert "detected_errors" in r_topo
         assert r_heal["status"] == "COMPLETED"
+        assert "healed_parcels" in r_heal
         assert r_exp["status"] == "COMPLETED"
 
-    def test_finding_f03a_unpack_shapefile_zip_does_not_call_upload_validator(
+    def test_finding_f03a_unpack_shapefile_zip_enforces_upload_validator_security(
         self, tmp_path: Path
     ) -> None:
-        """FINDING F-03a (Verified by execution):
-        UploadValidator.validate_archive_security blocks '../evil.txt', but unpack_shapefile_zip
-        calls zf.extractall() directly without invoking UploadValidator.validate_archive_security.
+        """FINDING F-03a REMEDIATED (Verified by execution):
+        unpack_shapefile_zip invokes UploadValidator.validate_archive_security before extraction
+        and rejects archives containing '../escaped_marker.txt' with PathTraversalError.
         """
         malicious_zip = _build_valid_shapefile_zip_bytes(extra_entry_name="../escaped_marker.txt")
 
-        # UploadValidator catches it:
         with pytest.raises(PathTraversalError):
             UploadValidator.validate_archive_security(malicious_zip)
 
-        # Direct call to unpack_shapefile_zip does NOT call UploadValidator.validate_archive_security:
         extract_dir = tmp_path / "nested" / "extract"
-        comp = unpack_shapefile_zip(malicious_zip, extract_dir=extract_dir)
-        assert comp.shp_path.exists()
+        with pytest.raises(PathTraversalError):
+            unpack_shapefile_zip(malicious_zip, extract_dir=extract_dir)
+        assert not (tmp_path / "nested" / "escaped_marker.txt").exists()
 
-    def test_finding_f04_docs_exposed_in_production_and_endpoints_unauthenticated(self) -> None:
-        """FINDING F-04 (Verified by execution):
-        1. create_app() sets docs_url='/docs' in both branches of the ternary even when app_env='production' and debug=False.
-        2. All /api/v1 endpoints accept unauthenticated requests without API key or bearer token.
-        """
-        settings = get_settings()
-        assert settings.app_env == "production"
-        assert settings.debug is False
-        prod_app = create_app()
-        assert prod_app.docs_url == "/docs"
-        assert prod_app.redoc_url == "/redoc"
-
-    def test_finding_f08_upload_form_field_name_mismatch_ignores_frontend_layer_name(
+    def test_finding_f04_docs_disabled_in_production_when_debug_is_false(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """FINDING F-08 (Verified by execution):
-        Frontend uploadLayer sends FormData field `name`, whereas backend upload_cadastral_layer
-        reads `layer_name = Form(None)`. Sending `name='Custom Ward Name'` is silently ignored
-        and falls back to the file stem ('ward14_raw').
+        """FINDING F-04a REMEDIATED (Verified by execution):
+        create_app() sets docs_url=None and redoc_url=None when app_env='production' and debug=False.
+        """
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("DEBUG", "false")
+        get_settings.cache_clear()
+        try:
+            settings = get_settings()
+            assert settings.app_env == "production"
+            assert settings.debug is False
+            prod_app = create_app()
+            assert prod_app.docs_url is None
+            assert prod_app.redoc_url is None
+        finally:
+            get_settings.cache_clear()
+
+    def test_finding_f08_upload_form_field_accepts_both_name_and_layer_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FINDING F-08 REMEDIATED (Verified by execution):
+        Backend upload_cadastral_layer accepts both `name` and `layer_name` FormData fields
+        and persists the user-supplied layer name ('Custom Ward Name').
         """
         from backend.storage import minio_client
         from backend.worker.celery_app import process_cadastral_layer_task
@@ -130,12 +138,11 @@ class TestSecurityAndContractVerification:
                 resp = client.post(
                     "/api/v1/layers/upload",
                     files={"file": ("ward14_raw.geojson", geojson_bytes, "application/geo+json")},
-                    data={"name": "Custom Ward Name"},  # what frontend/src/lib/api.ts sends
+                    data={"name": "Custom Ward Name"},
                 )
                 assert resp.status_code == 202
         finally:
             app.dependency_overrides.clear()
 
         assert len(added_objects) == 1
-        # Because backend expects `layer_name`, `name` was ignored and `raw_layer.name` fell back to 'ward14_raw'!
-        assert added_objects[0].name == "ward14_raw"
+        assert added_objects[0].name == "Custom Ward Name"

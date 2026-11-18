@@ -13,12 +13,13 @@ def create_app() -> FastAPI:
     """Construct and configure the production Cadastral Harmonization Engine FastAPI app."""
     settings = get_settings()
 
+    show_docs = settings.debug or settings.app_env != "production"
     app = FastAPI(
         title="Cadastral Harmonization Engine API",
         description="SIH26013: Multi-Source Geospatial Data Harmonization Engine for Urban Land Records",
         version="0.1.0",
-        docs_url="/docs" if settings.debug or settings.app_env != "production" else "/docs",
-        redoc_url="/redoc" if settings.debug or settings.app_env != "production" else "/redoc",
+        docs_url="/docs" if show_docs else None,
+        redoc_url="/redoc" if show_docs else None,
     )
 
     # CORS configuration

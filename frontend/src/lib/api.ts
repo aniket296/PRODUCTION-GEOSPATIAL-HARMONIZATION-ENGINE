@@ -45,6 +45,7 @@ export async function uploadLayer({
   formData.append("file", file);
   if (name) {
     formData.append("name", name);
+    formData.append("layer_name", name);
   }
   if (declaredCrs) {
     formData.append("declared_crs", declaredCrs);

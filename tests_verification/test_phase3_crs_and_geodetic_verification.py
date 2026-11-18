@@ -22,10 +22,10 @@ from backend.topology.recorder import project_metric_geometry_to_wgs84
 class TestCRSAndGeodeticVerification:
     """Executes verification checks for geodetic transformations and ingestion CRS invariants."""
 
-    def test_finding_f01_geojson_target_crs_relabels_without_reprojecting(self) -> None:
-        """FINDING F-01 (Verified by execution):
-        Passing target_crs='EPSG:4326' to GeoJSONIngestionReader overwrites detected_crs='EPSG:4326'
-        without reading the source 'crs' (EPSG:32643) or reprojecting the UTM metre coordinates.
+    def test_finding_f01_geojson_target_crs_reprojects_utm_to_wgs84(self) -> None:
+        """FINDING F-01 REMEDIATED (Verified by execution):
+        Passing target_crs='EPSG:4326' to GeoJSONIngestionReader extracts source_crs='EPSG:32643'
+        and reprojects the UTM Zone 43N metre coordinates into valid WGS 84 degrees.
         """
         utm_geojson = {
             "type": "FeatureCollection",
@@ -56,19 +56,16 @@ class TestCRSAndGeodeticVerification:
             target_crs="EPSG:4326",
         )
 
-        # Actual behavior: detected_crs is overwritten to EPSG:4326, but coordinates remain ~500,000 / 3,000,000!
         assert res.detected_crs == "EPSG:4326"
         minx, miny, maxx, maxy = res.bounds  # type: ignore[misc]
-        assert minx == pytest.approx(500000.0)
-        assert miny == pytest.approx(3000000.0)
-        # Because coordinates were not reprojected, reader falsely flags out_of_bounds_wgs84
-        assert res.features[0].properties.get("out_of_bounds_wgs84") is True
+        assert 74.0 <= minx <= 76.0
+        assert 26.5 <= miny <= 28.0
+        assert res.features[0].properties.get("out_of_bounds_wgs84") is not True
 
-    def test_finding_f05_helmert_to_inverse_vs_analytical_inverse_discrepancy(self) -> None:
-        """FINDING F-05 (Verified by execution):
-        HelmertParameters.to_inverse() simply negates (dx, dy, dz, rx, ry, rz, scale_ppm).
-        When rotations/scale are non-zero, forward-transforming with params.to_inverse()
-        diverges from the exact analytical inverse (inverse=True).
+    def test_finding_f05_helmert_to_inverse_matches_analytical_inverse(self) -> None:
+        """FINDING F-05 REMEDIATED (Verified by execution):
+        HelmertParameters.to_inverse() transforms the translation vector by -(I + R)^-1 / scale
+        so forward-transforming with params.to_inverse() matches the analytical inverse to sub-millimetre precision.
         """
         params = HelmertParameters(
             dx=295.0,
@@ -86,15 +83,13 @@ class TestCRSAndGeodeticVerification:
         pt = (1150000.0, 5600000.0, 3100000.0)
         fwd = HelmertTransform.transform_cartesian(pt, params, inverse=False)
 
-        # Analytical inverse (inverse=True) recovers pt to sub-nanometre precision:
         exact_inv = HelmertTransform.transform_cartesian(fwd, params, inverse=True)
         exact_err_m = math.dist(pt, exact_inv)
         assert exact_err_m < 1e-7
 
-        # Using params.to_inverse() in forward mode leaves a measurable translation/rotationcoupling error:
-        naive_inv = HelmertTransform.transform_cartesian(fwd, params.to_inverse(), inverse=False)
-        naive_err_m = math.dist(pt, naive_inv)
-        assert naive_err_m > 1e-2  # > 1 cm discrepancy due to un-rotated/un-scaled (-dx, -dy, -dz)
+        param_inv = HelmertTransform.transform_cartesian(fwd, params.to_inverse(), inverse=False)
+        param_err_m = math.dist(pt, param_inv)
+        assert param_err_m < 1e-4  # < 0.1 mm sub-millimetre precision
 
     def test_utm43n_to_wgs84_matches_independent_pyproj_reference(self) -> None:
         """Cross-checks project_metric_geometry_to_wgs84 against raw pyproj.Transformer."""
