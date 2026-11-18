@@ -63,21 +63,46 @@ class HelmertParameters:
         return self.x0 != 0.0 or self.y0 != 0.0 or self.z0 != 0.0
 
     def to_inverse(self) -> "HelmertParameters":
-        """Compute the mathematical inverse parameter set."""
-        rev_convention = (
-            HelmertConvention.COORDINATE_FRAME
-            if self.convention == HelmertConvention.COORDINATE_FRAME
-            else HelmertConvention.POSITION_VECTOR
-        )
+        """Compute the exact mathematical inverse parameter set."""
+        rx_rad = self.rx * (math.pi / (180.0 * 3600.0))
+        ry_rad = self.ry * (math.pi / (180.0 * 3600.0))
+        rz_rad = self.rz * (math.pi / (180.0 * 3600.0))
+
+        sgn = 1.0 if self.convention == HelmertConvention.COORDINATE_FRAME else -1.0
+        r01 = sgn * rz_rad
+        r02 = -sgn * ry_rad
+        r12 = sgn * rx_rad
+
+        scale = 1.0 + (self.scale_ppm * 1e-6)
+        det_r = 1.0 + r01 * r01 + r02 * r02 + r12 * r12
+
+        inv_00 = 1.0 + r12 * r12
+        inv_01 = -r01 - r12 * r02
+        inv_02 = r01 * r12 - r02
+
+        inv_10 = r01 - r12 * r02
+        inv_11 = 1.0 + r02 * r02
+        inv_12 = -r12 - r01 * r02
+
+        inv_20 = r01 * r12 + r02
+        inv_21 = r12 - r01 * r02
+        inv_22 = 1.0 + r01 * r01
+
+        inv_dx = -(inv_00 * self.dx + inv_01 * self.dy + inv_02 * self.dz) / (det_r * scale)
+        inv_dy = -(inv_10 * self.dx + inv_11 * self.dy + inv_12 * self.dz) / (det_r * scale)
+        inv_dz = -(inv_20 * self.dx + inv_21 * self.dy + inv_22 * self.dz) / (det_r * scale)
+        inv_scale = 1.0 / (scale * det_r)
+        inv_scale_ppm = (inv_scale - 1.0) * 1e6
+
         return HelmertParameters(
-            dx=-self.dx,
-            dy=-self.dy,
-            dz=-self.dz,
+            dx=inv_dx,
+            dy=inv_dy,
+            dz=inv_dz,
             rx=-self.rx,
             ry=-self.ry,
             rz=-self.rz,
-            scale_ppm=-self.scale_ppm,
-            convention=rev_convention,
+            scale_ppm=inv_scale_ppm,
+            convention=self.convention,
             x0=self.x0,
             y0=self.y0,
             z0=self.z0,

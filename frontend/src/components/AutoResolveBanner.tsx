@@ -45,10 +45,10 @@ export function AutoResolveBanner({
         <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs flex flex-col gap-1.5">
           <div className="flex items-center justify-between">
             <span className="font-medium text-emerald-400">
-              {lastResult.resolved_count} defects resolved
+              {lastResult.resolved_errors_count ?? lastResult.resolved_count ?? 0} defects resolved
             </span>
             <span className="font-mono text-[11px] text-amber-400">
-              {lastResult.skipped_disputed_count} dispute locked
+              {lastResult.remaining_disputes_count ?? lastResult.skipped_disputed_count ?? 0} dispute locked
             </span>
           </div>
 
@@ -56,19 +56,19 @@ export function AutoResolveBanner({
             <div>
               Slivers Merged:{" "}
               <strong className="text-slate-200">
-                {lastResult.slivers_merged ?? 0}
+                {lastResult.slivers_merged_count ?? lastResult.slivers_merged ?? 0}
               </strong>
             </div>
             <div>
               Overlaps Trimmed:{" "}
               <strong className="text-slate-200">
-                {lastResult.overlaps_trimmed ?? 0}
+                {lastResult.micro_overlaps_resolved_count ?? lastResult.overlaps_trimmed ?? 0}
               </strong>
             </div>
             <div>
               Gaps Closed:{" "}
               <strong className="text-slate-200">
-                {lastResult.gaps_closed ?? 0}
+                {lastResult.boundaries_snapped_count ?? lastResult.gaps_closed ?? 0}
               </strong>
             </div>
           </div>

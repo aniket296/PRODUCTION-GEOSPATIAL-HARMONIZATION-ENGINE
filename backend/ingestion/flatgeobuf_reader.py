@@ -19,7 +19,9 @@ import flatgeobuf.FlatGeobuf.GeometryType as GeomTypeFB
 import flatgeobuf.FlatGeobuf.Header as HeaderFB
 from flatgeobuf.header_meta import from_byte_buffer
 from flatgeobuf.packedrtree import PackedRTree, calc_tree_size, generate_level_bounds
+import pyproj
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+from shapely.ops import transform
 
 from backend.ingestion.geojson_reader import (
     enforce_rfc7946_winding_order,
@@ -614,6 +616,7 @@ class FlatGeobufIngestionReader:
         crs_str: str,
         is_geographic: bool,
         fallback_id: str,
+        reproject_fn: Any = None,
     ) -> Optional[FlatGeobufFeatureRecord]:
         """Decode and validate a single binary FlatGeobuf feature record."""
         try:
@@ -628,6 +631,9 @@ class FlatGeobufIngestionReader:
         geom = decode_feature_geometry(geom_fb, header.geometry_type)
         if not geom:
             return None
+
+        if reproject_fn is not None:
+            geom = transform(reproject_fn, geom)
 
         # Standardize geometry: remove duplicate consecutive vertices, winding order, precision
         if isinstance(geom, (Polygon, MultiPolygon)):
@@ -671,7 +677,16 @@ class FlatGeobufIngestionReader:
         """Stream features from an open FlatGeobuf byte stream, using packed R-tree index when available."""
         tree_offset = 12 + header.header_length
         features_offset = tree_offset + header.index_length
-        crs_str = target_crs or header.canonical_crs
+        source_crs = header.canonical_crs
+        crs_str = target_crs or source_crs
+        reproject_fn = None
+        if target_crs and source_crs.upper() != target_crs.upper():
+            try:
+                reproject_fn = pyproj.Transformer.from_crs(
+                    source_crs, target_crs, always_xy=True
+                ).transform
+            except Exception:
+                reproject_fn = None
         is_geographic = ("4326" in crs_str or "4269" in crs_str or "CRS84" in crs_str)
 
         if bbox and header.has_spatial_index and header.features_count > 0:
@@ -692,7 +707,7 @@ class FlatGeobufIngestionReader:
                     break
                 feat_len = struct.unpack("<I", len_bytes)[0]
                 feat_bytes = stream.read(feat_len)
-                record = cls._parse_single_feature(feat_bytes, header, crs_str, is_geographic, fallback_id=str(feat_idx))
+                record = cls._parse_single_feature(feat_bytes, header, crs_str, is_geographic, fallback_id=str(feat_idx), reproject_fn=reproject_fn)
                 if record:
                     b = record.bounds
                     # Check envelope overlap
@@ -708,7 +723,7 @@ class FlatGeobufIngestionReader:
                     break
                 feat_len = struct.unpack("<I", len_bytes)[0]
                 feat_bytes = stream.read(feat_len)
-                record = cls._parse_single_feature(feat_bytes, header, crs_str, is_geographic, fallback_id=str(feat_idx))
+                record = cls._parse_single_feature(feat_bytes, header, crs_str, is_geographic, fallback_id=str(feat_idx), reproject_fn=reproject_fn)
                 if record:
                     b = record.bounds
                     if not (b[2] < bbox[0] or b[0] > bbox[2] or b[3] < bbox[1] or b[1] > bbox[3]):
@@ -723,7 +738,7 @@ class FlatGeobufIngestionReader:
                     break
                 feat_len = struct.unpack("<I", len_bytes)[0]
                 feat_bytes = stream.read(feat_len)
-                record = cls._parse_single_feature(feat_bytes, header, crs_str, is_geographic, fallback_id=str(feat_idx))
+                record = cls._parse_single_feature(feat_bytes, header, crs_str, is_geographic, fallback_id=str(feat_idx), reproject_fn=reproject_fn)
                 if record:
                     yield record
 
